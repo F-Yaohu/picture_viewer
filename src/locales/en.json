@@ -1,0 +1,14 @@
+{
+  "app_title": "Picture Viewer",
+  "settings_title": "Settings",
+  "close_button": "Close",
+  "data_sources_title": "Data Sources",
+  "add_source_button": "Add Source",
+  "add_local_folder_button": "Add Local Folder",
+  "confirm_delete_source": "Are you sure you want to delete this data source and all its cached images?",
+  "include_subfolders_tooltip": "Include subfolders",
+  "loading": "Loading...",
+  "no_sources_added": "No data sources have been added yet.",
+  "filter_by_source": "Filter by source",
+  "all_sources": "All Sources"
+}

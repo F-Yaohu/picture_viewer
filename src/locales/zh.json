@@ -1,0 +1,14 @@
+{
+  "app_title": "图片查看器",
+  "settings_title": "设置",
+  "close_button": "关闭",
+  "data_sources_title": "数据源",
+  "add_source_button": "添加源",
+  "add_local_folder_button": "添加本地文件夹",
+  "confirm_delete_source": "您确定要删除此数据源及其所有缓存的图片吗？",
+  "include_subfolders_tooltip": "包含子文件夹",
+  "loading": "加载中...",
+  "no_sources_added": "尚未添加任何数据源。",
+  "filter_by_source": "按来源筛选",
+  "all_sources": "所有来源"
+}
