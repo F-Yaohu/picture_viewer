@@ -47,11 +47,33 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
     setPosition({ x: 0, y: 0 });
   }, []);
 
-  const handleWheel = useCallback((e: WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY * -0.005;
-    setScale(prevScale => Math.min(Math.max(prevScale + delta, MIN_SCALE), MAX_SCALE));
-  }, []);
+  // --- Robust Wheel Handler using the "useEvent" pattern ---
+  const savedWheelCallback = useRef((e: WheelEvent) => {});
+
+  useEffect(() => {
+    // Keep the ref updated with the latest handler
+    savedWheelCallback.current = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY * -0.005;
+      // Use functional update to always get the latest scale
+      setScale(prevScale => {
+        const newScale = Math.min(Math.max(prevScale + delta, MIN_SCALE), MAX_SCALE);
+        return newScale;
+      });
+    };
+  });
+
+  useEffect(() => {
+    const container = imageContainerRef.current;
+    if (open && container) {
+      const eventListener = (e: WheelEvent) => savedWheelCallback.current(e);
+      container.addEventListener('wheel', eventListener, { passive: false });
+      return () => {
+        container.removeEventListener('wheel', eventListener);
+      };
+    }
+  }, [open, imageContainerRef.current]); // Depend on 'open' and the ref's current value
+  // --- End of Wheel Handler ---
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0 || scale === 1) return; // Only main mouse button, and only allow drag when zoomed
@@ -82,17 +104,6 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
       setScale(2.5);
     }
   };
-
-  useEffect(() => {
-    const container = imageContainerRef.current;
-    if (container) {
-      container.addEventListener('wheel', handleWheel, { passive: false });
-      return () => {
-        container.removeEventListener('wheel', handleWheel);
-      };
-    }
-  }, [handleWheel]);
-
 
   const handleNavigation = useCallback((direction: 'prev' | 'next') => {
     if (!pictureId) return;
