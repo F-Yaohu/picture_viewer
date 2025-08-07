@@ -1,17 +1,21 @@
-import { useState, useEffect } from 'react';
-import { Masonry } from 'masonic';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Masonry, useInfiniteLoader } from 'masonic';
 import ImageListItemBar from '@mui/material/ImageListItemBar';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Picture } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
 const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
   const [imageUrl, setImageUrl] = useState<string | undefined>(() => imageUrlCache.get(data.id!));
 
+  // The aspect ratio is now known beforehand, so we can calculate the height synchronously.
+  const aspectRatio = (data.height && data.width) ? data.height / data.width : 1.25; // Fallback aspect ratio
+  const height = width * aspectRatio;
+
   useEffect(() => {
     let isMounted = true;
+    // Only create a new URL if it's not already cached.
     if (!imageUrl) {
       const createUrl = async () => {
         if (data.path) {
@@ -29,13 +33,11 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
       createUrl();
     }
     return () => { isMounted = false; };
-  }, [data, imageUrl]);
-
-  const aspectRatio = data.height && data.width ? data.height / data.width : 1.25;
-  const height = width * aspectRatio;
+  }, [data.id, data.path, imageUrl]); // Depend on data.id and data.path
 
   if (!imageUrl) {
-    return <div style={{ height, backgroundColor: '#333' }} />;
+    // Render a placeholder with the correct, pre-calculated height.
+    return <div style={{ height, backgroundColor: '#333', borderRadius: '4px' }} />;
   }
 
   return (
@@ -56,38 +58,61 @@ interface ImageGridProps {
 }
 
 export default function ImageGrid({ onPictureClick, onPicturesLoaded }: ImageGridProps) {
-  const pictures = useLiveQuery(
-    async () => {
-      const pics = await db.pictures.toArray();
-      pics.sort((a, b) => {
-        if (a.modified !== b.modified) return b.modified - a.modified;
-        return a.name.localeCompare(b.name);
-      });
-      return pics;
-    },
-    []
-  );
+  const [items, setItems] = useState<Picture[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const hasMoreRef = useRef(true);
+  const BATCH_SIZE = 50; // Load 50 items at a time
+
+
+  const loadMoreItems = useCallback(async (startIndex: number, stopIndex: number) => {
+    if (!hasMoreRef.current) return;
+
+    const newItems = await db.pictures
+      .orderBy('modified')
+      .reverse()
+      .offset(startIndex)
+      .limit(BATCH_SIZE)
+      .toArray();
+
+    if (newItems.length === 0) {
+      hasMoreRef.current = false;
+    }
+
+    setItems(currentItems => [...currentItems, ...newItems]);
+  }, []);
+  
+  const loader = useInfiniteLoader(loadMoreItems, {
+    isItemLoaded: (index, items) => !!items[index],
+    minimumBatchSize: BATCH_SIZE,
+    threshold: 3,
+  });
 
   useEffect(() => {
-    if (pictures) {
-      onPicturesLoaded(pictures.map(p => p.id!));
-    }
-  }, [pictures, onPicturesLoaded]);
+    setIsLoading(true);
+    loadMoreItems(0, BATCH_SIZE).finally(() => {
+      setIsLoading(false);
+    });
+  }, []); // Runs only once on mount
 
-  if (!pictures) {
+  useEffect(() => {
+    onPicturesLoaded(items.map(p => p.id!));
+  }, [items, onPicturesLoaded]);
+
+  if (isLoading) {
     return <Typography>Loading...</Typography>;
   }
-  
-  if (pictures.length === 0) {
+
+  if (items.length === 0 && !hasMoreRef.current) {
     return <Typography>No pictures found. Add or enable a data source and click Refresh.</Typography>;
   }
 
   return (
     <Masonry
-      items={pictures}
+      items={items}
       columnGutter={12}
       columnWidth={236}
       overscanBy={5}
+      onRender={loader}
       render={({ data, width }) => (
         <div onClick={() => onPictureClick(data.id!)}>
           <PictureCard data={data} width={width} />

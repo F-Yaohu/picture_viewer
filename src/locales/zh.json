@@ -15,5 +15,12 @@
   "permission_required_desc": "为了访问您的本地文件夹，需要重新授予权限。这是浏览器的安全机制。您有 {{count}} 个文件夹需要重新授权。",
   "permission_grant_button": "授予权限",
   "permission_granting": "请求中...",
-  "permission_partially_denied": "部分文件夹的权限未被授予。受影响的文件夹可能无法正常显示图片。"
+  "permission_partially_denied": "部分文件夹的权限未被授予。受影响的文件夹可能无法正常显示图片。",
+  "confirm_delete_source_title": "确认删除",
+  "confirm_delete_source_message": "您确定要删除此数据源及其所有缓存的图片吗？此操作不可撤销。",
+  "cancel_button": "取消",
+  "delete_button": "删除",
+  "permission_denied_title": "权限被拒绝",
+  "permission_denied_message": "读取所选文件夹内容的权限已被拒绝。如果您想添加此文件夹，请重试并授予权限。",
+  "ok_button": "好的"
 }

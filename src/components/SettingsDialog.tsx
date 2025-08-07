@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
@@ -8,6 +9,7 @@ import Typography from '@mui/material/Typography';
 import { useTranslation } from 'react-i18next';
 import DataSourceList from './DataSourceList';
 import { db } from '../db/db';
+import DialogContentText from '@mui/material/DialogContentText';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -22,6 +24,7 @@ declare global {
 
 export default function SettingsDialog({ open, onClose, onScanRequest }: SettingsDialogProps) {
   const { t } = useTranslation();
+  const [permissionDeniedOpen, setPermissionDeniedOpen] = useState(false);
 
   const handleAddLocalFolder = async () => {
     if ('showDirectoryPicker' in window) {
@@ -31,7 +34,7 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
         // We must request permission here in the main thread before sending the handle to the worker.
         const permission = await directoryHandle.requestPermission({ mode: 'read' });
         if (permission !== 'granted') {
-          alert('Permission to read the folder was denied.');
+          setPermissionDeniedOpen(true);
           return;
         }
 
@@ -47,7 +50,15 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
         onScanRequest();
 
       } catch (error) {
-        console.error('Error adding local folder:', error);
+        // It's common for users to close the picker, which throws an AbortError.
+        // We can safely ignore this specific error.
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          console.log('User closed the directory picker.');
+        } else {
+          console.error('Error adding local folder:', error);
+          // Optionally, show a user-facing error message here.
+          alert(`An unexpected error occurred: ${error}`);
+        }
       }
     } else {
       alert('Your browser does not support the File System Access API.');
@@ -55,20 +66,39 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
   };
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
-      <DialogTitle>{t('settings_title')}</DialogTitle>
-      <DialogContent dividers>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Typography variant="h6">{t('data_sources_title')}</Typography>
-          <Button variant="contained" onClick={handleAddLocalFolder}>
-            {t('add_local_folder_button')}
+    <>
+      <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+        <DialogTitle>{t('settings_title')}</DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="h6">{t('data_sources_title')}</Typography>
+            <Button variant="contained" onClick={handleAddLocalFolder}>
+              {t('add_local_folder_button')}
+            </Button>
+          </Box>
+          <DataSourceList />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose} autoFocus>{t('close_button')}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={permissionDeniedOpen}
+        onClose={() => setPermissionDeniedOpen(false)}
+      >
+        <DialogTitle>{t('permission_denied_title')}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {t('permission_denied_message')}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPermissionDeniedOpen(false)} autoFocus>
+            {t('ok_button')}
           </Button>
-        </Box>
-        <DataSourceList />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>{t('close_button')}</Button>
-      </DialogActions>
-    </Dialog>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 }

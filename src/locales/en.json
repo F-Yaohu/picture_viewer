@@ -15,5 +15,12 @@
   "permission_required_desc": "To access your local folders, you need to grant permission again. This is a security measure by your browser. You have {{count}} folder(s) that need re-authorization.",
   "permission_grant_button": "Grant Permissions",
   "permission_granting": "Requesting...",
-  "permission_partially_denied": "Some folder permissions were not granted. The affected folders may not display pictures correctly."
+  "permission_partially_denied": "Some folder permissions were not granted. The affected folders may not display pictures correctly.",
+  "confirm_delete_source_title": "Confirm Deletion",
+  "confirm_delete_source_message": "Are you sure you want to delete this data source and all its cached images? This action cannot be undone.",
+  "cancel_button": "Cancel",
+  "delete_button": "Delete",
+  "permission_denied_title": "Permission Denied",
+  "permission_denied_message": "Permission to read the contents of the selected folder was denied. Please try again and grant permission if you want to add this folder.",
+  "ok_button": "OK"
 }
