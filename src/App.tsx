@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useDispatch } from 'react-redux';
-import { ThemeProvider } from '@mui/material/styles';
+import { ThemeProvider, styled, alpha } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
@@ -9,6 +9,8 @@ import Container from '@mui/material/Container';
 import IconButton from '@mui/material/IconButton';
 import SettingsIcon from '@mui/icons-material/Settings';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SearchIcon from '@mui/icons-material/Search';
+import InputBase from '@mui/material/InputBase';
 import Box from '@mui/material/Box';
 import Modal from '@mui/material/Modal';
 import LinearProgress from '@mui/material/LinearProgress';
@@ -26,6 +28,49 @@ import { imageUrlCache } from './utils/imageUrlCache';
 import { setSources } from './store/slices/dataSourceSlice';
 import type { AppDispatch } from './store/store';
 import type { ProgressReport, CompletionReport, ErrorReport } from './workers/scan.worker';
+
+const Search = styled('div')(({ theme }) => ({
+  position: 'relative',
+  borderRadius: theme.shape.borderRadius,
+  backgroundColor: alpha(theme.palette.common.white, 0.15),
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.common.white, 0.25),
+  },
+  marginLeft: 0,
+  width: '100%',
+  [theme.breakpoints.up('sm')]: {
+    marginLeft: theme.spacing(1),
+    width: 'auto',
+  },
+}));
+
+const SearchIconWrapper = styled('div')(({ theme }) => ({
+  padding: theme.spacing(0, 2),
+  height: '100%',
+  position: 'absolute',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  zIndex: 1, // Ensure the icon is clickable
+}));
+
+const StyledInputBase = styled(InputBase)(({ theme }) => ({
+  color: 'inherit',
+  width: '100%',
+  '& .MuiInputBase-input': {
+    padding: theme.spacing(1, 1, 1, 0),
+    // vertical padding + font size from searchIcon
+    paddingLeft: `calc(1em + ${theme.spacing(4)})`,
+    transition: theme.transitions.create('width'),
+    [theme.breakpoints.up('sm')]: {
+      width: '12ch',
+      '&:focus': {
+        width: '20ch',
+      },
+    },
+  },
+}));
 
 const modalStyle = {
   position: 'absolute' as 'absolute',
@@ -49,12 +94,24 @@ function App() {
   const [currentPictureId, setCurrentPictureId] = useState<number | null>(null);
   const [sortedPictureIds, setSortedPictureIds] = useState<number[]>([]);
   const [filterSourceId, setFilterSourceId] = useState<number | 'all'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [inputValue, setInputValue] = useState('');
   
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [gridKey, setGridKey] = useState(0); // A key to manually remount the grid
   const [sourcesToVerify, setSourcesToVerify] = useState<DataSource[]>([]);
+
+  const handleSearchSubmit = () => {
+    setSearchTerm(inputValue);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter') {
+      handleSearchSubmit();
+    }
+  };
 
   useEffect(() => {
     scanWorker.current = new Worker(new URL('./workers/scan.worker.ts', import.meta.url), { type: 'module' });
@@ -145,7 +202,26 @@ function App() {
       <CssBaseline />
       <AppBar position="static">
         <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>{t('app_title')}</Typography>
+          <Typography
+            variant="h6"
+            noWrap
+            component="div"
+            sx={{ flexGrow: 1, display: { xs: 'none', sm: 'block' } }}
+          >
+            {t('app_title')}
+          </Typography>
+          <Search>
+            <SearchIconWrapper onClick={handleSearchSubmit}>
+              <SearchIcon />
+            </SearchIconWrapper>
+            <StyledInputBase
+              placeholder={t('search_placeholder') ?? "Search…"}
+              inputProps={{ 'aria-label': 'search' }}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+            />
+          </Search>
           <IconButton color="inherit" onClick={handleRefresh} disabled={isScanning}><RefreshIcon /></IconButton>
           <IconButton color="inherit" onClick={() => setSettingsOpen(true)} disabled={isScanning}><SettingsIcon /></IconButton>
         </Toolbar>
@@ -155,6 +231,7 @@ function App() {
         <ErrorBoundary key={gridKey}>
           <ImageGrid 
             filterSourceId={filterSourceId}
+            searchTerm={searchTerm}
             onPictureClick={(id) => { setCurrentPictureId(id); setViewerOpen(true); }} 
             onPicturesLoaded={setSortedPictureIds} 
           />

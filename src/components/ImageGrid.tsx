@@ -55,11 +55,12 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
 
 interface ImageGridProps {
   filterSourceId: number | 'all';
+  searchTerm: string;
   onPictureClick: (id: number) => void;
   onPicturesLoaded: (ids: number[]) => void;
 }
 
-export default function ImageGrid({ filterSourceId, onPictureClick, onPicturesLoaded }: ImageGridProps) {
+export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, onPicturesLoaded }: ImageGridProps) {
   const [items, setItems] = useState<Picture[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const hasMoreRef = useRef(true);
@@ -69,27 +70,31 @@ export default function ImageGrid({ filterSourceId, onPictureClick, onPicturesLo
   const loadMoreItems = useCallback(async (startIndex: number, stopIndex: number) => {
     if (!hasMoreRef.current) return;
 
-    let query;
-    if (filterSourceId === 'all') {
-      query = db.pictures.orderBy('modified').reverse();
-    } else {
-      // Use the new compound index for efficient filtering and sorting
-      query = db.pictures.where('[sourceId+modified]')
-        .between([filterSourceId, Dexie.minKey], [filterSourceId, Dexie.maxKey])
-        .reverse();
+    let collection = db.pictures.toCollection();
+
+    // Apply filtering
+    if (filterSourceId !== 'all') {
+      collection = collection.filter(p => p.sourceId === filterSourceId);
     }
 
-    const newItems = await query
-      .offset(startIndex)
-      .limit(BATCH_SIZE)
-      .toArray();
+    // Apply search term
+    if (searchTerm) {
+      collection = collection.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    }
+    
+    // After filtering and searching, sort and paginate
+    const newItems = await collection
+      .sortBy('modified')
+      .then(sorted => sorted.reverse())
+      .then(reversed => reversed.slice(startIndex, startIndex + BATCH_SIZE));
+
 
     if (newItems.length < BATCH_SIZE) {
       hasMoreRef.current = false;
     }
 
     setItems(currentItems => [...currentItems, ...newItems]);
-  }, [filterSourceId]); // Recreate the loader when the filter changes
+  }, [filterSourceId, searchTerm]); // Recreate the loader when the filter or search term changes
   
   const loader = useInfiniteLoader(loadMoreItems, {
     isItemLoaded: (index, items) => !!items[index],
@@ -98,14 +103,14 @@ export default function ImageGrid({ filterSourceId, onPictureClick, onPicturesLo
   });
 
   useEffect(() => {
-    // Reset everything when the filter changes
+    // Reset everything when the filter or search term changes
     setItems([]);
     hasMoreRef.current = true;
     setIsLoading(true);
     loadMoreItems(0, BATCH_SIZE).finally(() => {
       setIsLoading(false);
     });
-  }, [filterSourceId, loadMoreItems]); // Rerun when filter changes
+  }, [filterSourceId, searchTerm, loadMoreItems]); // Rerun when filter or search term changes
 
   useEffect(() => {
     onPicturesLoaded(items.map(p => p.id!));

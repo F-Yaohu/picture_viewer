@@ -22,5 +22,10 @@
   "delete_button": "Delete",
   "permission_denied_title": "Permission Denied",
   "permission_denied_message": "Permission to read the contents of the selected folder was denied. Please try again and grant permission if you want to add this folder.",
-  "ok_button": "OK"
+  "ok_button": "OK",
+  "confirm_refresh_title": "Settings Changed",
+  "confirm_refresh_message": "You have changed the data source settings. Do you want to refresh now to see the changes?",
+  "later_button": "Later",
+  "refresh_now_button": "Refresh Now",
+  "search_placeholder": "Search…"
 }

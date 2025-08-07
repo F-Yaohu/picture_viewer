@@ -22,5 +22,10 @@
   "delete_button": "删除",
   "permission_denied_title": "权限被拒绝",
   "permission_denied_message": "读取所选文件夹内容的权限已被拒绝。如果您想添加此文件夹，请重试并授予权限。",
-  "ok_button": "好的"
+  "ok_button": "好的",
+  "confirm_refresh_title": "设置已更改",
+  "confirm_refresh_message": "您更改了数据源设置。要立即刷新以查看更改吗？",
+  "later_button": "稍后刷新",
+  "refresh_now_button": "立即刷新",
+  "search_placeholder": "搜索…"
 }

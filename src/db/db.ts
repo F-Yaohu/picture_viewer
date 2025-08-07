@@ -38,6 +38,10 @@ export class PictureViewerDB extends Dexie {
       // Added a compound index for efficient filtering and sorting.
       pictures: '++id, sourceId, path, [modified+name], [sourceId+modified]',
     });
+    this.version(6).stores({
+      // Added an index for the name field for efficient searching.
+      pictures: '++id, name, sourceId, path, [modified+name], [sourceId+modified]',
+    });
   }
 }
 

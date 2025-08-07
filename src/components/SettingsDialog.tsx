@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
@@ -25,6 +25,21 @@ declare global {
 export default function SettingsDialog({ open, onClose, onScanRequest }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [permissionDeniedOpen, setPermissionDeniedOpen] = useState(false);
+  const [confirmRefreshOpen, setConfirmRefreshOpen] = useState(false);
+  const initialState = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      const captureState = async () => {
+        const sources = await db.dataSources.toArray();
+        // We only care about settings the user can change in the dialog
+        const relevantState = sources.map(s => ({ id: s.id, enabled: s.enabled, includeSubfolders: s.includeSubfolders }));
+        initialState.current = JSON.stringify(relevantState);
+      };
+      captureState();
+    }
+  }, [open]);
+
 
   const handleAddLocalFolder = async () => {
     if ('showDirectoryPicker' in window) {
@@ -46,9 +61,6 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
           includeSubfolders: true,
         });
         
-        // Request a scan from the main App component
-        onScanRequest();
-
       } catch (error) {
         // It's common for users to close the picker, which throws an AbortError.
         // We can safely ignore this specific error.
@@ -65,9 +77,32 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
     }
   };
 
+  const handleClose = async () => {
+    const currentSources = await db.dataSources.toArray();
+    const relevantState = currentSources.map(s => ({ id: s.id, enabled: s.enabled, includeSubfolders: s.includeSubfolders }));
+    const currentState = JSON.stringify(relevantState);
+
+    if (initialState.current !== currentState) {
+      setConfirmRefreshOpen(true);
+    } else {
+      onClose();
+    }
+  };
+
+  const handleConfirmRefresh = () => {
+    setConfirmRefreshOpen(false);
+    onScanRequest();
+    onClose();
+  };
+
+  const handleDeclineRefresh = () => {
+    setConfirmRefreshOpen(false);
+    onClose();
+  };
+
   return (
     <>
-      <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+      <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
         <DialogTitle>{t('settings_title')}</DialogTitle>
         <DialogContent dividers>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -79,7 +114,7 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
           <DataSourceList />
         </DialogContent>
         <DialogActions>
-          <Button onClick={onClose} autoFocus>{t('close_button')}</Button>
+          <Button onClick={handleClose} autoFocus>{t('close_button')}</Button>
         </DialogActions>
       </Dialog>
 
@@ -96,6 +131,24 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
         <DialogActions>
           <Button onClick={() => setPermissionDeniedOpen(false)} autoFocus>
             {t('ok_button')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={confirmRefreshOpen}
+        onClose={handleDeclineRefresh}
+      >
+        <DialogTitle>{t('confirm_refresh_title')}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {t('confirm_refresh_message')}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleDeclineRefresh}>{t('later_button')}</Button>
+          <Button onClick={handleConfirmRefresh} autoFocus>
+            {t('refresh_now_button')}
           </Button>
         </DialogActions>
       </Dialog>
