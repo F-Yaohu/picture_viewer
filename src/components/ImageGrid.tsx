@@ -3,6 +3,7 @@ import { Masonry, useInfiniteLoader } from 'masonic';
 import ImageListItemBar from '@mui/material/ImageListItemBar';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
+import Dexie from 'dexie';
 import { db, type Picture } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
@@ -53,11 +54,12 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
 };
 
 interface ImageGridProps {
+  filterSourceId: number | 'all';
   onPictureClick: (id: number) => void;
   onPicturesLoaded: (ids: number[]) => void;
 }
 
-export default function ImageGrid({ onPictureClick, onPicturesLoaded }: ImageGridProps) {
+export default function ImageGrid({ filterSourceId, onPictureClick, onPicturesLoaded }: ImageGridProps) {
   const [items, setItems] = useState<Picture[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const hasMoreRef = useRef(true);
@@ -67,19 +69,27 @@ export default function ImageGrid({ onPictureClick, onPicturesLoaded }: ImageGri
   const loadMoreItems = useCallback(async (startIndex: number, stopIndex: number) => {
     if (!hasMoreRef.current) return;
 
-    const newItems = await db.pictures
-      .orderBy('modified')
-      .reverse()
+    let query;
+    if (filterSourceId === 'all') {
+      query = db.pictures.orderBy('modified').reverse();
+    } else {
+      // Use the new compound index for efficient filtering and sorting
+      query = db.pictures.where('[sourceId+modified]')
+        .between([filterSourceId, Dexie.minKey], [filterSourceId, Dexie.maxKey])
+        .reverse();
+    }
+
+    const newItems = await query
       .offset(startIndex)
       .limit(BATCH_SIZE)
       .toArray();
 
-    if (newItems.length === 0) {
+    if (newItems.length < BATCH_SIZE) {
       hasMoreRef.current = false;
     }
 
     setItems(currentItems => [...currentItems, ...newItems]);
-  }, []);
+  }, [filterSourceId]); // Recreate the loader when the filter changes
   
   const loader = useInfiniteLoader(loadMoreItems, {
     isItemLoaded: (index, items) => !!items[index],
@@ -88,11 +98,14 @@ export default function ImageGrid({ onPictureClick, onPicturesLoaded }: ImageGri
   });
 
   useEffect(() => {
+    // Reset everything when the filter changes
+    setItems([]);
+    hasMoreRef.current = true;
     setIsLoading(true);
     loadMoreItems(0, BATCH_SIZE).finally(() => {
       setIsLoading(false);
     });
-  }, []); // Runs only once on mount
+  }, [filterSourceId, loadMoreItems]); // Rerun when filter changes
 
   useEffect(() => {
     onPicturesLoaded(items.map(p => p.id!));

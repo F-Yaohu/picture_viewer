@@ -34,6 +34,10 @@ export class PictureViewerDB extends Dexie {
       dataSources: '++id, name, type, enabled',
       pictures: '++id, sourceId, path, [modified+name]',
     });
+    this.version(5).stores({
+      // Added a compound index for efficient filtering and sorting.
+      pictures: '++id, sourceId, path, [modified+name], [sourceId+modified]',
+    });
   }
 }
 

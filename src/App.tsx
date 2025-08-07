@@ -20,6 +20,7 @@ import ImageGrid from './components/ImageGrid';
 import FullscreenViewer from './components/FullscreenViewer';
 import PermissionManager from './components/PermissionManager';
 import { ErrorBoundary } from './components/ErrorBoundary'; // Import the ErrorBoundary
+import FilterChips from './components/FilterChips';
 import { db, type DataSource } from './db/db';
 import { imageUrlCache } from './utils/imageUrlCache';
 import { setSources } from './store/slices/dataSourceSlice';
@@ -47,6 +48,7 @@ function App() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [currentPictureId, setCurrentPictureId] = useState<number | null>(null);
   const [sortedPictureIds, setSortedPictureIds] = useState<number[]>([]);
+  const [filterSourceId, setFilterSourceId] = useState<number | 'all'>('all');
   
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState('');
@@ -149,8 +151,10 @@ function App() {
         </Toolbar>
       </AppBar>
       <Container component="main" sx={{ mt: 2, mb: 2 }} maxWidth={false}>
+        <FilterChips selectedSourceId={filterSourceId} onSourceChange={setFilterSourceId} />
         <ErrorBoundary key={gridKey}>
           <ImageGrid 
+            filterSourceId={filterSourceId}
             onPictureClick={(id) => { setCurrentPictureId(id); setViewerOpen(true); }} 
             onPicturesLoaded={setSortedPictureIds} 
           />
