@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Dialog from '@mui/material/Dialog';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
@@ -7,10 +7,15 @@ import Typography from '@mui/material/Typography';
 import CloseIcon from '@mui/icons-material/Close';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
+import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Picture } from '../db/db';
+
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 5;
+
 
 function PictureDetails({ picture }: { picture: Picture }) {
   const source = useLiveQuery(() => db.dataSources.get(picture.sourceId), [picture.sourceId]);
@@ -28,6 +33,66 @@ function PictureDetails({ picture }: { picture: Picture }) {
 export default function FullscreenViewer({ open, onClose, pictureId, pictureIds, onNavigate }: any) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const picture = useLiveQuery(() => pictureId ? db.pictures.get(pictureId) : undefined, [pictureId]);
+
+  // States for zoom and pan
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+
+  const handleReset = useCallback(() => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  }, []);
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY * -0.005;
+    setScale(prevScale => Math.min(Math.max(prevScale + delta, MIN_SCALE), MAX_SCALE));
+  }, []);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0 || scale === 1) return; // Only main mouse button, and only allow drag when zoomed
+    e.preventDefault();
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    e.preventDefault();
+    setPosition({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y,
+    });
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  
+  const handleDoubleClick = () => {
+    if (scale > 1) {
+      handleReset();
+    } else {
+      // Zoom to a fixed intermediate scale
+      setScale(2.5);
+    }
+  };
+
+  useEffect(() => {
+    const container = imageContainerRef.current;
+    if (container) {
+      container.addEventListener('wheel', handleWheel, { passive: false });
+      return () => {
+        container.removeEventListener('wheel', handleWheel);
+      };
+    }
+  }, [handleWheel]);
+
 
   const handleNavigation = useCallback((direction: 'prev' | 'next') => {
     if (!pictureId) return;
@@ -65,6 +130,8 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
     let isMounted = true;
     const createUrl = async () => {
       if (picture?.path) {
+        // Reset zoom/pan state when picture changes
+        handleReset(); 
         setImageUrl(null);
         try {
           const fileHandle = picture.path as unknown as FileSystemFileHandle;
@@ -78,20 +145,51 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
       isMounted = false;
       if (imageUrl) URL.revokeObjectURL(imageUrl);
     };
-  }, [picture]);
+  }, [picture, handleReset]);
 
   return (
     <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent' } }}>
       <AppBar sx={{ position: 'relative', background: 'rgba(0,0,0,0.5)' }}>
         <Toolbar>
           <Typography sx={{ ml: 2, flex: 1 }} variant="h6" component="div">{picture?.name || 'Image Viewer'}</Typography>
+          <IconButton color="inherit" onClick={handleReset} aria-label="reset zoom"><ZoomInMapIcon /></IconButton>
           <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close"><CloseIcon /></IconButton>
         </Toolbar>
       </AppBar>
       <Box sx={{ display: 'flex', height: 'calc(100% - 64px)', bgcolor: 'rgba(0,0,0,0.8)' }}>
         <IconButton onClick={() => handleNavigation('prev')} sx={{ color: 'white', my: 'auto', zIndex: 1 }}><ArrowBackIosNewIcon fontSize="large" /></IconButton>
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 1, overflow: 'hidden' }}>
-          {imageUrl ? <img src={imageUrl} alt={picture?.name} style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }} /> : <Typography>Loading...</Typography>}
+        <Box 
+          ref={imageContainerRef}
+          sx={{ 
+            flex: 1, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            p: 1, 
+            overflow: 'hidden', 
+            cursor: isDragging ? 'grabbing' : (scale > 1 ? 'grab' : 'default')
+          }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp} // End drag if mouse leaves the area
+        >
+          {imageUrl ? (
+            <img 
+              ref={imageRef}
+              src={imageUrl} 
+              alt={picture?.name} 
+              style={{ 
+                maxHeight: '100%', 
+                maxWidth: '100%', 
+                objectFit: 'contain',
+                transform: `scale(${scale}) translate(${position.x}px, ${position.y}px)`,
+                transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                cursor: 'inherit'
+              }}
+              onDoubleClick={handleDoubleClick}
+            />
+          ) : <Typography>Loading...</Typography>}
         </Box>
         <IconButton onClick={() => handleNavigation('next')} sx={{ color: 'white', my: 'auto', zIndex: 1 }}><ArrowForwardIosIcon fontSize="large" /></IconButton>
         <Box sx={{ width: '320px', p: 2, overflowY: 'auto', position: 'absolute', right: 0, top: '64px', height: 'calc(100% - 64px)' }}>
