@@ -18,8 +18,10 @@ import theme from './theme';
 import SettingsDialog from './components/SettingsDialog';
 import ImageGrid from './components/ImageGrid';
 import FullscreenViewer from './components/FullscreenViewer';
+import PermissionManager from './components/PermissionManager';
 import { ErrorBoundary } from './components/ErrorBoundary'; // Import the ErrorBoundary
-import { db } from './db/db';
+import { db, type DataSource } from './db/db';
+import { imageUrlCache } from './utils/imageUrlCache';
 import { setSources } from './store/slices/dataSourceSlice';
 import type { AppDispatch } from './store/store';
 import type { ProgressReport, CompletionReport, ErrorReport } from './workers/scan.worker';
@@ -50,6 +52,7 @@ function App() {
   const [scanStatus, setScanStatus] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [gridKey, setGridKey] = useState(0); // A key to manually remount the grid
+  const [sourcesToVerify, setSourcesToVerify] = useState<DataSource[]>([]);
 
   useEffect(() => {
     scanWorker.current = new Worker(new URL('./workers/scan.worker.ts', import.meta.url), { type: 'module' });
@@ -87,6 +90,23 @@ function App() {
       }
     };
 
+    const checkPermissions = async () => {
+      const localSources = await db.dataSources.where('type').equals('local').toArray();
+      const sourcesToReverify: DataSource[] = [];
+      for (const source of localSources) {
+        const handle = source.path as FileSystemDirectoryHandle;
+        // Silently check for permission status.
+        const permissionStatus = await handle.queryPermission({ mode: 'read' });
+        if (permissionStatus !== 'granted') {
+          sourcesToReverify.push(source);
+        }
+      }
+      if (sourcesToReverify.length > 0) {
+        setSourcesToVerify(sourcesToReverify);
+      }
+    };
+    checkPermissions();
+
     return () => scanWorker.current?.terminate();
   }, []);
 
@@ -109,6 +129,15 @@ function App() {
     }
   };
 
+  const handleVerificationComplete = () => {
+    // Clear the list of sources that need verification
+    setSourcesToVerify([]);
+    // Revoke all old URLs and clear the cache to force re-creation
+    imageUrlCache.revokeAndClear();
+    // Remount the grid to re-fetch images with the newly granted permissions
+    setGridKey(prevKey => prevKey + 1);
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -129,6 +158,7 @@ function App() {
       </Container>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onScanRequest={handleRefresh} />
       <FullscreenViewer open={viewerOpen} onClose={() => setViewerOpen(false)} pictureId={currentPictureId} pictureIds={sortedPictureIds} onNavigate={setCurrentPictureId} />
+      <PermissionManager sourcesToVerify={sourcesToVerify} onVerificationComplete={handleVerificationComplete} />
       <Modal open={isScanning}>
         <Box sx={modalStyle}>
           <Typography variant="h6" component="h2">Scanning in Progress</Typography>

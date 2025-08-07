@@ -10,5 +10,10 @@
   "loading": "Loading...",
   "no_sources_added": "No data sources have been added yet.",
   "filter_by_source": "Filter by source",
-  "all_sources": "All Sources"
+  "all_sources": "All Sources",
+  "permission_required_title": "Permissions Required",
+  "permission_required_desc": "To access your local folders, you need to grant permission again. This is a security measure by your browser. You have {{count}} folder(s) that need re-authorization.",
+  "permission_grant_button": "Grant Permissions",
+  "permission_granting": "Requesting...",
+  "permission_partially_denied": "Some folder permissions were not granted. The affected folders may not display pictures correctly."
 }
