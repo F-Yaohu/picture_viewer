@@ -63,7 +63,7 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
         adds.push(pictureData);
       }
     }
-    
+
     if (index % 20 === 0) {
       const progress = (index / fileHandles.length) * 100;
       self.postMessage({ type: 'progress', progress, statusText: `Scanning ${source.name}...` } as ProgressReport);
@@ -76,7 +76,7 @@ self.onmessage = async (event: MessageEvent<ScanCommand>) => {
   if (event.data.type === 'scan') {
     try {
       const { sources, existingPictures, sourceIdsToScan } = event.data;
-      
+
       const existingMap = new Map<string, Picture>();
       const existingBySource = new Map<number, Map<string, Picture>>();
 
@@ -110,7 +110,7 @@ self.onmessage = async (event: MessageEvent<ScanCommand>) => {
         if (results) {
           allAdds.push(...results.adds);
           allUpdates.push(...results.updates);
-          
+
           // --- ISOLATED DELETION LOGIC ---
           const sourceId = source.id;
           if (sourceIdsToScan.includes(sourceId)) {
@@ -124,7 +124,7 @@ self.onmessage = async (event: MessageEvent<ScanCommand>) => {
           }
         }
       }
-      
+
       self.postMessage({ type: 'progress', progress: 100, statusText: 'Finalizing...' } as ProgressReport);
       self.postMessage({ type: 'complete', adds: allAdds, updates: allUpdates, deletes: allDeletes } as CompletionReport);
 
@@ -188,16 +188,11 @@ async function scanRemoteSource(source: DataSource, existingMap: Map<string, Pic
   let hasMore = true;
 
   while (hasMore) {
-    if (maxImages && adds.length >= maxImages) {
-      hasMore = false;
-      continue;
-    }
-
     self.postMessage({ type: 'progress', progress: (page % 10) * 10, statusText: `Fetching page ${page} from ${source.name}...` } as ProgressReport);
 
     const finalUrl = new URL(resolveExpression(url, page));
     const params = new URLSearchParams();
-    
+
     const bodyData = body ? JSON.parse(resolveExpression(body, page)) : {};
 
     if (method === 'GET') {
@@ -206,15 +201,22 @@ async function scanRemoteSource(source: DataSource, existingMap: Map<string, Pic
       }
       finalUrl.search = params.toString();
     }
-    
-    const requestOptions: RequestInit = {
+
+    // 通过代理请求远程API
+    const proxyUrl = '/api/proxy';
+    const proxyRequestBody = {
+      url: finalUrl.toString(),
       method,
-      headers: new Headers(headers),
+      headers,
       body: method === 'POST' ? JSON.stringify(bodyData) : undefined,
     };
 
     try {
-      const response = await fetch(finalUrl.toString(), requestOptions);
+      const response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(proxyRequestBody),
+      });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -227,6 +229,11 @@ async function scanRemoteSource(source: DataSource, existingMap: Map<string, Pic
       }
 
       for (const image of images) {
+        if (maxImages && seenKeys.size >= maxImages) {
+          hasMore = false;
+          break;
+        }
+
         let imageUrl = getValueByPath(image, fieldMapping.url);
         const imageName = getValueByPath(image, fieldMapping.name);
         const modifiedStr = fieldMapping.modified ? getValueByPath(image, fieldMapping.modified) : undefined;
@@ -234,36 +241,33 @@ async function scanRemoteSource(source: DataSource, existingMap: Map<string, Pic
 
         if (!imageUrl || !imageName) continue;
 
-        // Prepend baseURL if it exists and the imageUrl is a relative path
         if (baseURL && !imageUrl.startsWith('http')) {
           imageUrl = new URL(imageUrl, baseURL).href;
         }
 
-        const key = `${source.id}|${imageUrl}`; // Use URL as the unique identifier for remote images
+        const key = `${source.id}|${imageUrl}`;
+        if (seenKeys.has(key)) continue; // 避免重复
+
         seenKeys.add(key);
         const existing = existingMap.get(key);
 
         if (existing && existing.modified === modified) {
           // Unchanged
+        } else if (existing) {
+          updates.push({ ...existing, name: imageName, path: imageUrl, modified });
         } else {
-          const pictureData: Omit<Picture, 'id'> = {
+          adds.push({
             sourceId: source.id!,
             name: imageName,
             path: imageUrl,
             modified,
-            // We don't know the size/dimensions of remote images yet
-          };
-          if (existing) {
-            updates.push({ ...pictureData, id: existing.id });
-          } else {
-            adds.push(pictureData);
-          }
+          });
         }
       }
       page++;
     } catch (error: any) {
       self.postMessage({ type: 'error', message: `Failed to fetch from ${source.name}: ${error.message}` } as ErrorReport);
-      hasMore = false; // Stop pagination on error
+      hasMore = false;
     }
   }
   return { adds, updates, seenKeys };

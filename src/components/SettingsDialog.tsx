@@ -107,9 +107,11 @@ export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSin
     }
   };
 
-  const handleConfirmRefresh = () => {
+  const handleConfirmRefresh = async () => {
     setConfirmRefreshOpen(false);
-    onScanRequest();
+    const allEnabledSources = await db.dataSources.where('enabled').equals(1).toArray();
+    const localSourcesToScan = allEnabledSources.filter(s => s.type === 'local');
+    onScanRequest(localSourcesToScan);
     onClose();
   };
 
