@@ -177,15 +177,27 @@ function App() {
     }
   }, [dbDataSources, dispatch]);
 
-  const handleRefresh = async () => {
-    const sources = await db.dataSources.where('enabled').equals(1).toArray();
+  const handleRefresh = async (sourcesToScan?: DataSource[]) => {
+    const sources = sourcesToScan || await db.dataSources.where('enabled').equals(1).toArray();
     if (sources.length > 0) {
       setIsScanning(true);
       setScanProgress(0);
       setScanStatus('Preparing to scan...');
       const existingPictures = await db.pictures.toArray();
-      scanWorker.current?.postMessage({ type: 'scan', sources, existingPictures });
+      const sourceIdsToScan = sources.map(s => s.id!);
+      scanWorker.current?.postMessage({ type: 'scan', sources, existingPictures, sourceIdsToScan });
     }
+  };
+
+  const handleGlobalRefresh = async () => {
+    const allEnabledSources = await db.dataSources.where('enabled').equals(1).toArray();
+    const localSourcesToScan = allEnabledSources.filter(s => s.type === 'local');
+    handleRefresh(localSourcesToScan);
+  };
+
+  const handleSyncSingleSource = (source: DataSource) => {
+    handleRefresh([source]);
+    setSettingsOpen(false); // Close settings dialog after initiating sync
   };
 
   const handleVerificationComplete = () => {
@@ -222,7 +234,7 @@ function App() {
               onKeyDown={handleSearchKeyDown}
             />
           </Search>
-          <IconButton color="inherit" onClick={handleRefresh} disabled={isScanning}><RefreshIcon /></IconButton>
+          <IconButton color="inherit" onClick={handleGlobalRefresh} disabled={isScanning}><RefreshIcon /></IconButton>
           <IconButton color="inherit" onClick={() => setSettingsOpen(true)} disabled={isScanning}><SettingsIcon /></IconButton>
         </Toolbar>
       </AppBar>
@@ -237,7 +249,12 @@ function App() {
           />
         </ErrorBoundary>
       </Container>
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} onScanRequest={handleRefresh} />
+      <SettingsDialog 
+        open={settingsOpen} 
+        onClose={() => setSettingsOpen(false)} 
+        onScanRequest={handleRefresh}
+        onSyncSingleSource={handleSyncSingleSource}
+      />
       <FullscreenViewer open={viewerOpen} onClose={() => setViewerOpen(false)} pictureId={currentPictureId} pictureIds={sortedPictureIds} onNavigate={setCurrentPictureId} />
       <PermissionManager sourcesToVerify={sourcesToVerify} onVerificationComplete={handleVerificationComplete} />
       <Modal open={isScanning}>

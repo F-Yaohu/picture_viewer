@@ -8,13 +8,15 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import { useTranslation } from 'react-i18next';
 import DataSourceList from './DataSourceList';
-import { db } from '../db/db';
+import { db, type DataSource } from '../db/db';
 import DialogContentText from '@mui/material/DialogContentText';
+import RemoteSourceDialog from './RemoteSourceDialog';
 
 interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
-  onScanRequest: () => void; // Callback to request a scan
+  onScanRequest: (sources?: DataSource[]) => void;
+  onSyncSingleSource: (source: DataSource) => void;
 }
 
 declare global {
@@ -22,10 +24,12 @@ declare global {
   interface FileSystemDirectoryHandle { name: string; }
 }
 
-export default function SettingsDialog({ open, onClose, onScanRequest }: SettingsDialogProps) {
+export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSingleSource }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [permissionDeniedOpen, setPermissionDeniedOpen] = useState(false);
   const [confirmRefreshOpen, setConfirmRefreshOpen] = useState(false);
+  const [remoteSourceDialogOpen, setRemoteSourceDialogOpen] = useState(false);
+  const [editingDataSource, setEditingDataSource] = useState<DataSource | undefined>(undefined);
   const initialState = useRef<string | null>(null);
 
   useEffect(() => {
@@ -39,6 +43,20 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
       captureState();
     }
   }, [open]);
+
+  const handleEdit = (dataSource: DataSource) => {
+    if (dataSource.type === 'remote') {
+      setEditingDataSource(dataSource);
+      setRemoteSourceDialogOpen(true);
+    } else {
+      // For local sources, "editing" means re-picking the folder.
+      alert(t('edit_local_source_helper'));
+    }
+  };
+
+  const handleSync = (dataSource: DataSource) => {
+    onSyncSingleSource(dataSource);
+  };
 
 
   const handleAddLocalFolder = async () => {
@@ -107,11 +125,16 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
         <DialogContent dividers>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
             <Typography variant="h6">{t('data_sources_title')}</Typography>
-            <Button variant="contained" onClick={handleAddLocalFolder}>
-              {t('add_local_folder_button')}
-            </Button>
+            <Box>
+              <Button variant="contained" onClick={handleAddLocalFolder} sx={{ mr: 1 }}>
+                {t('add_local_folder_button')}
+              </Button>
+              <Button variant="contained" onClick={() => setRemoteSourceDialogOpen(true)}>
+                {t('add_remote_source_button')}
+              </Button>
+            </Box>
           </Box>
-          <DataSourceList />
+          <DataSourceList onEdit={handleEdit} onSync={handleSync} />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleClose} autoFocus>{t('close_button')}</Button>
@@ -152,6 +175,15 @@ export default function SettingsDialog({ open, onClose, onScanRequest }: Setting
           </Button>
         </DialogActions>
       </Dialog>
+
+      <RemoteSourceDialog 
+        open={remoteSourceDialogOpen}
+        onClose={() => {
+          setRemoteSourceDialogOpen(false);
+          setEditingDataSource(undefined);
+        }}
+        dataSource={editingDataSource}
+      />
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
@@ -7,6 +7,8 @@ import IconButton from '@mui/material/IconButton';
 import Switch from '@mui/material/Switch';
 import Checkbox from '@mui/material/Checkbox';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import SyncIcon from '@mui/icons-material/Sync';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
 import Tooltip from '@mui/material/Tooltip';
 import Box from '@mui/material/Box';
@@ -19,10 +21,15 @@ import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useTranslation } from 'react-i18next';
-import { db } from '../db/db';
+import { db, type DataSource } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
-export default function DataSourceList() {
+interface DataSourceListProps {
+  onEdit: (dataSource: DataSource) => void;
+  onSync: (dataSource: DataSource) => void;
+}
+
+export default function DataSourceList({ onEdit, onSync }: DataSourceListProps) {
   const { t } = useTranslation();
   const dataSources = useLiveQuery(() => db.dataSources.toArray(), []);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -74,36 +81,54 @@ export default function DataSourceList() {
     <>
       <List>
         {dataSources.map((source) => (
-          <ListItem
-            key={source.id}
-            secondaryAction={
-              <IconButton edge="end" aria-label="delete" onClick={() => handleDelete(source.id!)}>
-                <DeleteIcon />
-              </IconButton>
-            }
-          >
-            <Switch
-              edge="start"
-              checked={!!source.enabled}
-              onChange={(e) => handleToggleEnabled(source.id!, e.target.checked)}
-            />
-            <ListItemText 
-              primary={source.name} 
-              secondary={source.type} 
-              sx={{ ml: 2, mr: 2 }} 
-            />
-            <Chip label={`${source.pictureCount ?? 0} items`} size="small" sx={{ mr: 2 }} />
-            {source.type === 'local' && (
-              <Tooltip title={t('include_subfolders_tooltip')}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                  <Checkbox
-                    checked={!!source.includeSubfolders}
-                    onChange={() => handleToggleSubfolders(source.id!, source.includeSubfolders ?? false)}
-                  />
-                  <FolderZipIcon />
-                </Box>
-              </Tooltip>
-            )}
+          <ListItem key={source.id} divider>
+            <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              <Switch
+                edge="start"
+                checked={!!source.enabled}
+                onChange={(e) => handleToggleEnabled(source.id!, e.target.checked)}
+              />
+              <ListItemText 
+                primary={source.name} 
+                secondary={source.type} 
+                sx={{ ml: 2, flexGrow: 1 }} 
+              />
+              <Chip label={`${source.pictureCount ?? 0} items`} size="small" sx={{ mx: 2 }} />
+              
+              <Box sx={{ display: 'flex', alignItems: 'center', minWidth: '150px', justifyContent: 'flex-end' }}>
+                {source.type === 'local' && (
+                  <Tooltip title={t('include_subfolders_tooltip')}>
+                    <Checkbox
+                      checked={!!source.includeSubfolders}
+                      onChange={() => handleToggleSubfolders(source.id!, source.includeSubfolders ?? false)}
+                      icon={<FolderZipIcon />}
+                      checkedIcon={<FolderZipIcon />}
+                    />
+                  </Tooltip>
+                )}
+                
+                {source.type === 'remote' && (
+                  <>
+                    <Tooltip title={t('sync_source_tooltip')}>
+                      <IconButton aria-label="sync" onClick={() => onSync(source)}>
+                        <SyncIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title={t('edit_source_tooltip')}>
+                      <IconButton aria-label="edit" onClick={() => onEdit(source)}>
+                        <EditIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </>
+                )}
+                
+                <Tooltip title={t('delete_source_tooltip')}>
+                  <IconButton aria-label="delete" onClick={() => handleDelete(source.id!)}>
+                    <DeleteIcon />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            </Box>
           </ListItem>
         ))}
       </List>

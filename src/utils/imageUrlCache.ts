@@ -27,6 +27,14 @@ class ImageUrlCache {
     }
     this.cache.clear();
   }
+
+  has(key: number): boolean {
+    return this.cache.has(key);
+  }
+
+  delete(key: number): void {
+    this.cache.delete(key);
+  }
 }
 
 export const imageUrlCache = new ImageUrlCache();

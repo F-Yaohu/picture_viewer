@@ -48,7 +48,7 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
   }, []);
 
   // --- Robust Wheel Handler using the "useEvent" pattern ---
-  const savedWheelCallback = useRef((e: WheelEvent) => {});
+  const savedWheelCallback = useRef((_: WheelEvent) => {});
 
   useEffect(() => {
     // Keep the ref updated with the latest handler
@@ -91,8 +91,7 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
     });
   };
 
-  const handleMouseUp = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleMouseUp = () => {
     setIsDragging(false);
   };
   
@@ -139,22 +138,36 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
 
   useEffect(() => {
     let isMounted = true;
+    let objectUrl: string | null = null;
+
     const createUrl = async () => {
-      if (picture?.path) {
-        // Reset zoom/pan state when picture changes
-        handleReset(); 
-        setImageUrl(null);
+      if (!picture) return;
+
+      // Reset zoom/pan state when picture changes
+      handleReset(); 
+      setImageUrl(null);
+
+      if (typeof picture.path === 'string') {
+        // It's a remote URL
+        if (isMounted) setImageUrl(picture.path);
+      } else {
+        // It's a local FileSystemFileHandle
         try {
           const fileHandle = picture.path as unknown as FileSystemFileHandle;
           const file = await fileHandle.getFile();
-          if (isMounted) setImageUrl(URL.createObjectURL(file));
+          objectUrl = URL.createObjectURL(file);
+          if (isMounted) setImageUrl(objectUrl);
         } catch (error) { console.error('Failed to create object URL for viewer:', error); }
       }
     };
+
     createUrl();
+
     return () => {
       isMounted = false;
-      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
   }, [picture, handleReset]);
 

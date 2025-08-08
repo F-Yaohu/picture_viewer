@@ -3,12 +3,14 @@ import { Masonry, useInfiniteLoader } from 'masonic';
 import ImageListItemBar from '@mui/material/ImageListItemBar';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
-import Dexie from 'dexie';
 import { db, type Picture } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
 const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
-  const [imageUrl, setImageUrl] = useState<string | undefined>(() => imageUrlCache.get(data.id!));
+  const [imageUrl, setImageUrl] = useState<string | undefined>(() => {
+    // For remote images, the path is the URL. For local, we check the cache.
+    return typeof data.path === 'string' ? data.path : imageUrlCache.get(data.id!);
+  });
 
   // The aspect ratio is now known beforehand, so we can calculate the height synchronously.
   const aspectRatio = (data.height && data.width) ? data.height / data.width : 1.25; // Fallback aspect ratio
@@ -16,8 +18,8 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
 
   useEffect(() => {
     let isMounted = true;
-    // Only create a new URL if it's not already cached.
-    if (!imageUrl) {
+    // Only create an Object URL for local files (if not already cached and not a remote URL)
+    if (!imageUrl && typeof data.path !== 'string') {
       const createUrl = async () => {
         if (data.path) {
           try {
@@ -35,6 +37,7 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
     }
     return () => { isMounted = false; };
   }, [data.id, data.path, imageUrl]); // Depend on data.id and data.path
+
 
   if (!imageUrl) {
     // Render a placeholder with the correct, pre-calculated height.
@@ -67,7 +70,7 @@ export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, 
   const BATCH_SIZE = 50; // Load 50 items at a time
 
 
-  const loadMoreItems = useCallback(async (startIndex: number, stopIndex: number) => {
+  const loadMoreItems = useCallback(async (startIndex: number) => {
     if (!hasMoreRef.current) return;
 
     let collection = db.pictures.toCollection();
@@ -107,7 +110,7 @@ export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, 
     setItems([]);
     hasMoreRef.current = true;
     setIsLoading(true);
-    loadMoreItems(0, BATCH_SIZE).finally(() => {
+    loadMoreItems(0).finally(() => {
       setIsLoading(false);
     });
   }, [filterSourceId, searchTerm, loadMoreItems]); // Rerun when filter or search term changes
