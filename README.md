@@ -28,55 +28,41 @@
 
 ## 快速开始
 
-### 1. 克隆项目
+### 1. Docker 一键部署
+
+无需本地构建，直接拉取官方镜像：
 
 ```bash
-git clone https://github.com/F-Yaohu/picture_viewer.git
-cd picture_viewer
+docker pull zy1234567/picture-viewer-app:latest
 ```
 
-### 2. 安装依赖
+或使用 docker-compose：
+
+```bash
+docker-compose up -d
+```
+
+默认访问 [http://localhost:3889](http://localhost:3889)
+
+### 2. 本地开发
+
+如需本地开发或自定义构建：
 
 ```bash
 npm install
-```
-
-### 3. 本地开发
-
-```bash
 npm run dev
 ```
 
 访问 [http://localhost:5173](http://localhost:5173)
 
-### 4. 构建生产包
+### 3. 构建生产包并本地运行
 
 ```bash
 npm run build
-```
-
-### 5. 启动后端服务（本地/生产）
-
-```bash
 npm start
 ```
 
 默认监听 [http://localhost:3889](http://localhost:3889)
-
-### 6. Docker 部署
-
-构建并启动容器：
-
-```bash
-docker-compose up --build -d
-```
-
-或手动：
-
-```bash
-docker build -t picture-viewer-app .
-docker run -d -p 3889:3889 picture-viewer-app
-```
 
 ## 目录结构
 

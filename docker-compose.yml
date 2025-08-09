@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  picture-viewer:
+    image: zy1234567/picture-viewer-app:latest
+    container_name: picture-viewer-app
+    ports:
+      - "3889:3889"
+    restart: unless-stopped
