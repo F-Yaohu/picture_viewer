@@ -35,52 +35,53 @@
 -   已安装 [Docker](https://www.docker.com/get-started)
 -   已安装 [Docker Compose](https://docs.docker.com/compose/install/)
 
-### 2. 配置
+### 2. 配置与启动
 
-在部署之前，您如果需要配置要展示的服务端图片文件夹，请参考以下操作。
+1.  在您希望部署本项目的目录下，创建一个名为 `docker-compose.yml` 的文件。
 
-1.  **打开 `docker-compose.yml` 文件。**
-
-2.  **映射文件夹 (`volumes`):**
-    找到 `volumes` 部分。您需要将您宿主机（您的电脑）上的图片文件夹路径映射到容器内部。请修改以下示例行：
+2.  将以下内容**完整复制**并粘贴到 `docker-compose.yml` 文件中：
 
     ```yaml
-    volumes:
-      # 将左侧的路径替换为您自己的图片文件夹路径
-      # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
-      - /xxx/你需要展示的文件夹1:/data/landscapes
-      - /xxx/你需要展示的文件夹2:/data/anime
+    version: '3.8'
+
+    services:
+      picture-viewer:
+        image: zy1234567/picture-viewer-app:latest
+        container_name: picture-viewer-app
+        ports:
+          - "3889:3889"
+        restart: unless-stopped
+        environment:
+          # 在这里定义服务端数据源，格式是一个 JSON 数组。
+          # "name" 是您希望在网页上看到的分类名
+          # "path" 必须与您在 volumes 中设置的容器内路径完全一致
+          - SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]
+        volumes:
+          # 在这里将您宿主机上的文件夹映射到容器内部。
+          # 将左侧的路径替换为您自己的图片文件夹路径
+          # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
+          - /xxx/你需要展示的文件夹1:/data/test-images:ro
     ```
-    您可以根据需要添加任意多行来进行文件夹映射。
 
-3.  **配置环境变量 (`environment`):**
-    找到 `environment` 部分。您需要在这里定义 `SERVER_SOURCES` 变量，让应用知道每个文件夹在前端应该显示什么名字。
+3.  **修改 `docker-compose.yml` 文件中的 `volumes` 部分**，将 ` /xxx/你需要展示的文件夹1` 替换为您自己电脑上存放图片的**绝对路径**。例如：
+    -   Windows: `C:/Users/YourUser/Pictures/MyPhotos:/data/test-images:ro`
+    -   Linux/Mac: `/home/youruser/pictures/myphotos:/data/test-images:ro`
 
-    ```yaml
-    environment:
-      # "name" 是您希望在网页上看到的分类名
-      # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-      - SERVER_SOURCES=[{"name":"风景壁纸","path":"/data/landscapes"},{"name":"动漫收藏","path":"/data/anime"}]
+    您可以添加多行 `-` 来映射多个文件夹，并相应地更新 `SERVER_SOURCES` 环境变量。
+
+4.  保存文件后，在该目录下打开终端，运行以下命令启动服务：
+
+    ```bash
+    docker-compose up -d
     ```
-    请确保 `volumes` 和 `environment` 中的路径配置是匹配的。
 
-### 3. 启动服务
+### 3. 访问应用
 
-完成配置后，在项目根目录下打开终端，运行以下命令：
+现在，您可以在浏览器中打开 `http://localhost:3889` 来访问您的图片查看器应用。
 
-```bash
-docker-compose up -d
-```
+### 4. 停止服务
 
-该命令会自动拉取或构建 Docker 镜像，并以后台模式启动服务。
-
-### 4. 访问应用
-
-现在，您可以在浏览器中打开 `http://localhost:3889` 来访问您的图片查看器应用。您应该能看到您配置的服务端图片。
-
-### 5. 停止服务
-
-要停止服务，请在项目根目录下运行：
+要停止服务，请在 `docker-compose.yml` 所在目录下运行：
 
 ```bash
 docker-compose down
