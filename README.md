@@ -55,12 +55,12 @@
           # 在这里定义服务端数据源，格式是一个 JSON 数组。
           # "name" 是您希望在网页上看到的分类名
           # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-          - SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]
+          - 'SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]'
         volumes:
           # 在这里将您宿主机上的文件夹映射到容器内部。
           # 将左侧的路径替换为您自己的图片文件夹路径
           # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
-          - /xxx/你需要展示的文件夹1:/data/test-images:ro
+          - '/xxx/你需要展示的文件夹1:/data/test-images:ro'
     ```
 
 3.  **修改 `docker-compose.yml` 文件中的 `volumes` 部分**，将 ` /xxx/你需要展示的文件夹1` 替换为您自己电脑上存放图片的**绝对路径**。例如：

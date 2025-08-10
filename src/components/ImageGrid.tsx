@@ -109,6 +109,16 @@ export default function ImageGrid({ filterSourceId, searchTerm, serverSources, o
 
       // --- For 'all' view, also fetch from server ---
       if (filterSourceId === 'all') {
+        // First, get the IDs of all enabled client-side sources
+        const enabledClientSourceIds = await db.dataSources.where('enabled').equals(1).primaryKeys();
+        // Then, fetch only the pictures belonging to those sources
+        const clientCollection = db.pictures.where('sourceId').anyOf(enabledClientSourceIds);
+        
+        const clientItems = await clientCollection
+          .sortBy('modified')
+          .then(sorted => sorted.reverse())
+          .then(reversed => reversed.slice(offset, offset + limit));
+
         const response = await fetch(`/api/server-pictures?offset=${offset}&limit=${limit}&searchTerm=${encodeURIComponent(searchTerm)}`);
         const serverData = await response.json();
         const serverItems = serverData.pictures || [];
