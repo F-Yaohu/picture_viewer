@@ -23,7 +23,7 @@ import FullscreenViewer from './components/FullscreenViewer';
 import PermissionManager from './components/PermissionManager';
 import { ErrorBoundary } from './components/ErrorBoundary'; // 错误边界组件
 import FilterChips from './components/FilterChips';
-import { db, type DataSource } from './db/db';
+import { db, type DataSource, type Picture } from './db/db';
 import { imageUrlCache } from './utils/imageUrlCache';
 import { setSources } from './store/slices/dataSourceSlice';
 import type { AppDispatch } from './store/store';
@@ -96,8 +96,8 @@ function App() {
   // 组件状态定义
   const [settingsOpen, setSettingsOpen] = useState(false); // 设置弹窗开关
   const [viewerOpen, setViewerOpen] = useState(false); // 全屏图片查看器开关
-  const [currentPictureId, setCurrentPictureId] = useState<number | null>(null); // 当前查看图片ID
-  const [sortedPictureIds, setSortedPictureIds] = useState<number[]>([]); // 当前图片排序
+  const [currentPicture, setCurrentPicture] = useState<Picture | null>(null); // 当前查看图片对象
+  const [sortedPictures, setSortedPictures] = useState<Picture[]>([]); // Store the full picture objects for navigation
   const [filterSourceId, setFilterSourceId] = useState<number | 'all'>('all'); // 数据源筛选
   const [searchTerm, setSearchTerm] = useState(''); // 搜索关键词
   const [inputValue, setInputValue] = useState(''); // 搜索输入框内容
@@ -107,11 +107,30 @@ function App() {
   const [isScanning, setIsScanning] = useState(false); // 是否正在扫描
   const [gridKey, setGridKey] = useState(0); // 用于强制重载图片网格
   const [sourcesToVerify, setSourcesToVerify] = useState<DataSource[]>([]); // 需要重新授权的本地数据源
+  const [serverSources, setServerSources] = useState<DataSource[]>([]);
 
   // 搜索提交
   const handleSearchSubmit = () => {
     setSearchTerm(inputValue);
   };
+  
+  // 新增：从后端获取服务端数据源
+  useEffect(() => {
+    const fetchServerData = async () => {
+      try {
+        const response = await fetch('/api/server-data');
+        if (response.ok) {
+          const data = await response.json();
+          setServerSources(data.sources || []);
+        } else {
+          console.error('Failed to fetch server data');
+        }
+      } catch (error) {
+        console.error('Error fetching server data:', error);
+      }
+    };
+    fetchServerData();
+  }, []);
 
   // 回车触发搜索
   const handleSearchKeyDown = (event: React.KeyboardEvent) => {
@@ -219,11 +238,37 @@ function App() {
     setSettingsOpen(false); // 同步后关闭设置弹窗
   };
 
+  // 合并客户端和服务端数据源
+  const combinedSources = [...(dbDataSources || []), ...serverSources];
+
   // 本地文件夹重新授权完成后回调
   const handleVerificationComplete = () => {
     setSourcesToVerify([]);
     imageUrlCache.revokeAndClear(); // 清空图片URL缓存
     setGridKey(prevKey => prevKey + 1); // 强制重载图片网格
+  };
+
+  // This function now receives the full, sorted list of pictures from ImageGrid
+  const handlePicturesLoaded = (allPictures: Picture[]) => {
+    setSortedPictures(allPictures);
+  };
+
+  const handlePictureClick = (picture: Picture) => {
+    setCurrentPicture(picture);
+    setViewerOpen(true);
+  };
+
+  const handleNavigation = (currentId: number, direction: 'prev' | 'next') => {
+    const currentIndex = sortedPictures.findIndex(p => p.id === currentId);
+    if (currentIndex === -1) return;
+
+    let nextIndex;
+    if (direction === 'next') {
+      nextIndex = (currentIndex + 1) % sortedPictures.length;
+    } else {
+      nextIndex = (currentIndex - 1 + sortedPictures.length) % sortedPictures.length;
+    }
+    setCurrentPicture(sortedPictures[nextIndex]);
   };
 
   return (
@@ -262,14 +307,15 @@ function App() {
       {/* 主体内容区 */}
       <Container component="main" sx={{ mt: 2, mb: 2 }} maxWidth={false}>
         {/* 数据源筛选标签 */}
-        <FilterChips selectedSourceId={filterSourceId} onSourceChange={setFilterSourceId} />
+        <FilterChips allSources={combinedSources} selectedSourceId={filterSourceId} onSourceChange={setFilterSourceId} />
         {/* 错误边界包裹图片网格，防止渲染异常导致页面崩溃 */}
         <ErrorBoundary key={gridKey}>
           <ImageGrid 
             filterSourceId={filterSourceId}
             searchTerm={searchTerm}
-            onPictureClick={(id) => { setCurrentPictureId(id); setViewerOpen(true); }} 
-            onPicturesLoaded={setSortedPictureIds} 
+            serverSources={serverSources}
+            onPictureClick={handlePictureClick} 
+            onPicturesLoaded={handlePicturesLoaded} 
           />
         </ErrorBoundary>
       </Container>
@@ -281,7 +327,12 @@ function App() {
         onSyncSingleSource={handleSyncSingleSource}
       />
       {/* 全屏图片查看器 */}
-      <FullscreenViewer open={viewerOpen} onClose={() => setViewerOpen(false)} pictureId={currentPictureId} pictureIds={sortedPictureIds} onNavigate={setCurrentPictureId} />
+      <FullscreenViewer 
+        open={viewerOpen} 
+        onClose={() => setViewerOpen(false)} 
+        picture={currentPicture} 
+        onNavigate={(direction) => currentPicture && handleNavigation(currentPicture.id!, direction)} 
+      />
       {/* 本地文件夹权限管理弹窗 */}
       <PermissionManager sourcesToVerify={sourcesToVerify} onVerificationComplete={handleVerificationComplete} />
       {/* 扫描进度弹窗 */}

@@ -1,20 +1,20 @@
-import { useSelector } from 'react-redux';
 import Chip from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
 import { useTranslation } from 'react-i18next';
-import type { RootState } from '../store/store';
+import type { DataSource } from '../db/db';
 
 interface FilterChipsProps {
+  allSources: DataSource[];
   selectedSourceId: number | 'all';
   onSourceChange: (sourceId: number | 'all') => void;
 }
 
-export default function FilterChips({ selectedSourceId, onSourceChange }: FilterChipsProps) {
+export default function FilterChips({ allSources, selectedSourceId, onSourceChange }: FilterChipsProps) {
   const { t } = useTranslation();
-  const allDataSources = useSelector((state: RootState) => state.dataSources.sources);
-  const enabledDataSources = allDataSources.filter(source => source.enabled === 1);
+  // Filter for enabled sources directly from the passed prop
+  const enabledDataSources = allSources.filter(source => source.enabled === 1 || source.type === 'server');
 
-  // We only show the filter if there is more than one *enabled* source.
+  // We only show the filter if there is more than one *enabled* or server source.
   if (enabledDataSources.length <= 1) {
     return null;
   }

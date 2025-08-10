@@ -26,36 +26,84 @@
 - i18next（国际化）
 - Docker & docker-compose
 
-## 快速开始
+## Docker 部署
 
-### 1. Docker 一键部署
+本项目支持通过 Docker 和 Docker Compose 进行快速部署。
 
-无需本地构建，直接拉取官方镜像：
+### 1. 先决条件
 
-```bash
-docker pull zy1234567/picture-viewer-app:latest
-```
+-   已安装 [Docker](https://www.docker.com/get-started)
+-   已安装 [Docker Compose](https://docs.docker.com/compose/install/)
 
-或使用 docker-compose：
+### 2. 配置
+
+在部署之前，您如果需要配置要展示的服务端图片文件夹，请参考以下操作。
+
+1.  **打开 `docker-compose.yml` 文件。**
+
+2.  **映射文件夹 (`volumes`):**
+    找到 `volumes` 部分。您需要将您宿主机（您的电脑）上的图片文件夹路径映射到容器内部。请修改以下示例行：
+
+    ```yaml
+    volumes:
+      # 将左侧的路径替换为您自己的图片文件夹路径
+      # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
+      - /xxx/你需要展示的文件夹1:/data/landscapes
+      - /xxx/你需要展示的文件夹2:/data/anime
+    ```
+    您可以根据需要添加任意多行来进行文件夹映射。
+
+3.  **配置环境变量 (`environment`):**
+    找到 `environment` 部分。您需要在这里定义 `SERVER_SOURCES` 变量，让应用知道每个文件夹在前端应该显示什么名字。
+
+    ```yaml
+    environment:
+      # "name" 是您希望在网页上看到的分类名
+      # "path" 必须与您在 volumes 中设置的容器内路径完全一致
+      - SERVER_SOURCES=[{"name":"风景壁纸","path":"/data/landscapes"},{"name":"动漫收藏","path":"/data/anime"}]
+    ```
+    请确保 `volumes` 和 `environment` 中的路径配置是匹配的。
+
+### 3. 启动服务
+
+完成配置后，在项目根目录下打开终端，运行以下命令：
 
 ```bash
 docker-compose up -d
 ```
 
-默认访问 [http://localhost:3889](http://localhost:3889)
+该命令会自动拉取或构建 Docker 镜像，并以后台模式启动服务。
 
-### 2. 本地开发
+### 4. 访问应用
+
+现在，您可以在浏览器中打开 `http://localhost:3889` 来访问您的图片查看器应用。您应该能看到您配置的服务端图片。
+
+### 5. 停止服务
+
+要停止服务，请在项目根目录下运行：
+
+```bash
+docker-compose down
+```
+
+## 本地开发
 
 如需本地开发或自定义构建：
 
 ```bash
+# 1. 安装依赖
 npm install
+
+# 2. 在一个终端启动后端服务
+node server.cjs
+
+# 3. 在另一个终端启动前端开发服务器
 npm run dev
 ```
 
 访问 [http://localhost:5173](http://localhost:5173)
 
-### 3. 构建生产包并本地运行
+## 构建生产包并本地运行
 
 ```bash
 npm run build
@@ -63,6 +111,7 @@ npm start
 ```
 
 默认监听 [http://localhost:3889](http://localhost:3889)
+
 
 ## 目录结构
 

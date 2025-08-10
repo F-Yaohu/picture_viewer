@@ -7,4 +7,12 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3889',
+        changeOrigin: true,
+      }
+    }
+  }
 })

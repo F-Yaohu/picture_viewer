@@ -30,9 +30,15 @@ function PictureDetails({ picture }: { picture: Picture }) {
   );
 }
 
-export default function FullscreenViewer({ open, onClose, pictureId, pictureIds, onNavigate }: any) {
+interface FullscreenViewerProps {
+  open: boolean;
+  onClose: () => void;
+  picture: Picture | null;
+  onNavigate: (direction: 'prev' | 'next') => void;
+}
+
+export default function FullscreenViewer({ open, onClose, picture, onNavigate }: FullscreenViewerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const picture = useLiveQuery(() => pictureId ? db.pictures.get(pictureId) : undefined, [pictureId]);
 
   // States for zoom and pan
   const [scale, setScale] = useState(1);
@@ -105,16 +111,9 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
   };
 
   const handleNavigation = useCallback((direction: 'prev' | 'next') => {
-    if (!pictureId) return;
-    const currentIndex = pictureIds.indexOf(pictureId);
-    let nextIndex;
-    if (direction === 'next') {
-      nextIndex = (currentIndex + 1) % pictureIds.length;
-    } else {
-      nextIndex = (currentIndex - 1 + pictureIds.length) % pictureIds.length;
-    }
-    onNavigate(pictureIds[nextIndex]);
-  }, [pictureId, pictureIds, onNavigate]);
+    if (!picture) return;
+    onNavigate(direction);
+  }, [picture, onNavigate]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -171,6 +170,13 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
     };
   }, [picture, handleReset]);
 
+  useEffect(() => {
+    // When the image URL is set, focus the container to enable wheel events immediately.
+    if (imageUrl && imageContainerRef.current) {
+      imageContainerRef.current.focus();
+    }
+  }, [imageUrl]);
+
   return (
     <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent' } }}>
       <AppBar sx={{ position: 'relative', background: 'rgba(0,0,0,0.5)' }}>
@@ -184,6 +190,7 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
         <IconButton onClick={() => handleNavigation('prev')} sx={{ color: 'white', my: 'auto', zIndex: 1 }}><ArrowBackIosNewIcon fontSize="large" /></IconButton>
         <Box 
           ref={imageContainerRef}
+          tabIndex={-1} // Make the container focusable
           sx={{ 
             flex: 1, 
             display: 'flex', 
@@ -191,6 +198,7 @@ export default function FullscreenViewer({ open, onClose, pictureId, pictureIds,
             justifyContent: 'center', 
             p: 1, 
             overflow: 'hidden', 
+            outline: 'none', // Remove the focus outline
             cursor: isDragging ? 'grabbing' : (scale > 1 ? 'grab' : 'default')
           }}
           onMouseDown={handleMouseDown}

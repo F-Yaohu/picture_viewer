@@ -3,7 +3,7 @@ import { Masonry, useInfiniteLoader } from 'masonic';
 import ImageListItemBar from '@mui/material/ImageListItemBar';
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
-import { db, type Picture } from '../db/db';
+import { db, type Picture, type DataSource } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
 const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
@@ -59,45 +59,82 @@ const PictureCard = ({ data, width }: { data: Picture, width: number }) => {
 interface ImageGridProps {
   filterSourceId: number | 'all';
   searchTerm: string;
-  onPictureClick: (id: number) => void;
-  onPicturesLoaded: (ids: number[]) => void;
+  serverSources: DataSource[];
+  onPictureClick: (picture: Picture) => void;
+  onPicturesLoaded: (pictures: Picture[]) => void;
 }
 
-export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, onPicturesLoaded }: ImageGridProps) {
+export default function ImageGrid({ filterSourceId, searchTerm, serverSources, onPictureClick, onPicturesLoaded }: ImageGridProps) {
   const [items, setItems] = useState<Picture[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const hasMoreRef = useRef(true);
   const BATCH_SIZE = 50; // Load 50 items at a time
 
+  const isServerSource = (sourceId: number | 'all') => {
+    if (sourceId === 'all') return false; // 'all' is not a server source itself
+    return serverSources.some(s => s.id === sourceId);
+  };
 
   const loadMoreItems = useCallback(async (startIndex: number) => {
-    if (!hasMoreRef.current) return;
+    if (!hasMoreRef.current && startIndex > 0) return;
 
-    let collection = db.pictures.toCollection();
+    let newItems: Picture[] = [];
+    let hasMore = true;
 
-    // Apply filtering
-    if (filterSourceId !== 'all') {
-      collection = collection.filter(p => p.sourceId === filterSourceId);
+    const offset = startIndex;
+    const limit = BATCH_SIZE;
+
+    if (isServerSource(filterSourceId)) {
+      // --- Case 1: Fetching from a specific server source ---
+      const source = serverSources.find(s => s.id === filterSourceId);
+      const response = await fetch(`/api/server-pictures?sourceName=${encodeURIComponent(source!.name)}&offset=${offset}&limit=${limit}&searchTerm=${encodeURIComponent(searchTerm)}`);
+      const data = await response.json();
+      newItems = data.pictures || [];
+      hasMore = data.hasMore;
+
+    } else {
+      // --- Case 2: Fetching from Dexie (client-side sources or 'all') ---
+      let collection = db.pictures.toCollection();
+      if (filterSourceId !== 'all') {
+        collection = collection.filter(p => p.sourceId === filterSourceId);
+      }
+      if (searchTerm) {
+        collection = collection.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+      }
+      
+      const clientItems = await collection
+        .sortBy('modified')
+        .then(sorted => sorted.reverse())
+        .then(reversed => reversed.slice(offset, offset + limit));
+
+      // --- For 'all' view, also fetch from server ---
+      if (filterSourceId === 'all') {
+        const response = await fetch(`/api/server-pictures?offset=${offset}&limit=${limit}&searchTerm=${encodeURIComponent(searchTerm)}`);
+        const serverData = await response.json();
+        const serverItems = serverData.pictures || [];
+        
+        // Combine and re-sort
+        const combined = [...clientItems, ...serverItems];
+        combined.sort((a, b) => b.modified - a.modified);
+        newItems = combined.slice(0, limit); // Ensure we don't exceed the batch size
+
+        // If either has more, we assume there are more items overall
+        hasMore = (clientItems.length === limit) || serverData.hasMore;
+
+      } else {
+        newItems = clientItems;
+        hasMore = newItems.length === limit;
+      }
     }
 
-    // Apply search term
-    if (searchTerm) {
-      collection = collection.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+    hasMoreRef.current = hasMore;
+
+    if (startIndex === 0) {
+      setItems(newItems);
+    } else {
+      setItems(currentItems => [...currentItems, ...newItems]);
     }
-    
-    // After filtering and searching, sort and paginate
-    const newItems = await collection
-      .sortBy('modified')
-      .then(sorted => sorted.reverse())
-      .then(reversed => reversed.slice(startIndex, startIndex + BATCH_SIZE));
-
-
-    if (newItems.length < BATCH_SIZE) {
-      hasMoreRef.current = false;
-    }
-
-    setItems(currentItems => [...currentItems, ...newItems]);
-  }, [filterSourceId, searchTerm]); // Recreate the loader when the filter or search term changes
+  }, [filterSourceId, searchTerm, serverSources]);
   
   const loader = useInfiniteLoader(loadMoreItems, {
     isItemLoaded: (index, items) => !!items[index],
@@ -113,11 +150,12 @@ export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, 
     loadMoreItems(0).finally(() => {
       setIsLoading(false);
     });
-  }, [filterSourceId, searchTerm, loadMoreItems]); // Rerun when filter or search term changes
+  }, [filterSourceId, searchTerm, serverSources, loadMoreItems]); // Rerun when filter/search/server data changes
 
   useEffect(() => {
-    onPicturesLoaded(items.map(p => p.id!));
+    onPicturesLoaded(items);
   }, [items, onPicturesLoaded]);
+
 
   if (isLoading) {
     return <Typography>Loading...</Typography>;
@@ -135,7 +173,7 @@ export default function ImageGrid({ filterSourceId, searchTerm, onPictureClick, 
       overscanBy={5}
       onRender={loader}
       render={({ data, width }) => (
-        <div onClick={() => onPictureClick(data.id!)}>
+        <div onClick={() => onPictureClick(data)}>
           <PictureCard data={data} width={width} />
         </div>
       )}

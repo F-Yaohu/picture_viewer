@@ -18,7 +18,7 @@ export interface RemoteConfig {
 // Define the structure of a data source (e.g., local folder, remote API)
 export interface DataSource {
   id?: number;
-  type: 'local' | 'remote';
+  type: 'local' | 'remote' | 'server';
   name: string;
   path: any; // Can be a string for remote or a FileSystemHandle for local
   enabled: number; // 1 for true, 0 for false
