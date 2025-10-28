@@ -23,21 +23,13 @@
 - MUI (Material UI)
 - Redux Toolkit
 - Dexie（IndexedDB 封装）
-- i18next（国际化）
 - Docker & docker-compose
-
 ## Docker 部署
-
 本项目支持通过 Docker 和 Docker Compose 进行快速部署。
-
 ### 1. 先决条件
-
 -   已安装 [Docker](https://www.docker.com/get-started)
--   已安装 [Docker Compose](https://docs.docker.com/compose/install/)
 
-### 2. 配置与启动
 
-1.  在您希望部署本项目的目录下，创建一个名为 `docker-compose.yml` 的文件。
 
 2.  将以下内容**完整复制**并粘贴到 `docker-compose.yml` 文件中：
 
@@ -55,8 +47,6 @@
           # 在这里定义服务端数据源，格式是一个 JSON 数组。
           # "name" 是您希望在网页上看到的分类名
           # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-          - 'SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]'
-        volumes:
           # 在这里将您宿主机上的文件夹映射到容器内部。
           # 将左侧的路径替换为您自己的图片文件夹路径
           # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
