@@ -39,9 +39,16 @@ export interface Picture {
   height?: number;
 }
 
+// Simple key/value settings store
+export interface SettingEntry {
+  key: string;
+  value: any;
+}
+
 export class PictureViewerDB extends Dexie {
   dataSources!: Table<DataSource>;
   pictures!: Table<Picture>;
+  settings!: Table<SettingEntry, string>;
 
   constructor() {
     super('pictureViewerDB');
@@ -67,6 +74,9 @@ export class PictureViewerDB extends Dexie {
       // Dexie handles additive changes to interfaces automatically.
     });
     this.version(9).stores({}); // For baseURL addition
+    this.version(10).stores({
+      settings: 'key'
+    });
   }
 }
 

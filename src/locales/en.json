@@ -69,5 +69,18 @@
   "max_images_label": "Max Images (Optional)",
   "max_images_helper": "Max number of images to import during sync. Leave blank for no limit.",
   "base_url_label": "Image Base URL (Optional)",
-  "base_url_helper": "If the API returns relative paths, enter the base URL to prepend here."
+  "base_url_helper": "If the API returns relative paths, enter the base URL to prepend here.",
+  "row_height_label": "Row height",
+  "row_height_helper": "Target height per row in pixels. Lower values show more rows; higher values make images larger. Suggested range: 150-300.",
+  "gap_label": "Gap",
+  "gap_helper": "Gap in pixels between images. Default is 12.",
+  "group_by_label": "Group by",
+  "group_by_helper": "Choose how to group images by time: day, week or month. Weekly or monthly grouping helps when browsing large date ranges.",
+  "day": "Day",
+  "week": "Week",
+  "month": "Month"
+  ,
+  "reset_button": "Reset to defaults"
+  ,
+  "settings_saved": "Settings saved"
 }

@@ -11,12 +11,23 @@ import DataSourceList from './DataSourceList';
 import { db, type DataSource } from '../db/db';
 import DialogContentText from '@mui/material/DialogContentText';
 import RemoteSourceDialog from './RemoteSourceDialog';
+import TextField from '@mui/material/TextField';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import Snackbar from '@mui/material/Snackbar';
+import Alert from '@mui/material/Alert';
+
+interface GridSettings { rowHeight: number; gap: number; groupBy: 'day'|'week'|'month' }
 
 interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
   onScanRequest: (sources?: DataSource[]) => void;
   onSyncSingleSource: (source: DataSource) => void;
+  gridSettings?: GridSettings;
+  onGridSettingsChange?: (next: GridSettings) => void;
 }
 
 declare global {
@@ -24,16 +35,20 @@ declare global {
   interface FileSystemDirectoryHandle { name: string; }
 }
 
-export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSingleSource }: SettingsDialogProps) {
+export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSingleSource, gridSettings, onGridSettingsChange }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [permissionDeniedOpen, setPermissionDeniedOpen] = useState(false);
   const [confirmRefreshOpen, setConfirmRefreshOpen] = useState(false);
   const [remoteSourceDialogOpen, setRemoteSourceDialogOpen] = useState(false);
   const [editingDataSource, setEditingDataSource] = useState<DataSource | undefined>(undefined);
   const initialState = useRef<string | null>(null);
+  const [localGridSettings, setLocalGridSettings] = useState<GridSettings>(gridSettings || { rowHeight: 220, gap: 12, groupBy: 'day' });
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
+      // When opening dialog, sync localGridSettings with prop
+      setLocalGridSettings(gridSettings || { rowHeight: 220, gap: 12, groupBy: 'day' });
       const captureState = async () => {
         const sources = await db.dataSources.toArray();
         // We only care about settings the user can change in the dialog
@@ -136,6 +151,71 @@ export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSin
               </Button>
             </Box>
           </Box>
+          {/* Grid layout settings */}
+          <Box sx={{ mb: 2, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+              <TextField
+              label={t('row_height_label') || 'Row height'}
+              type="number"
+              size="small"
+              value={localGridSettings.rowHeight}
+              onChange={(e) => {
+                const v = Math.max(40, Number(e.target.value || 0));
+                const next = { ...localGridSettings, rowHeight: v };
+                setLocalGridSettings(next);
+                onGridSettingsChange?.(next);
+                setSnackbarOpen(true);
+              }}
+            />
+            <TextField
+              label={t('gap_label') || 'Gap'}
+              type="number"
+              size="small"
+              value={localGridSettings.gap}
+              onChange={(e) => {
+                const v = Math.max(0, Number(e.target.value || 0));
+                const next = { ...localGridSettings, gap: v };
+                setLocalGridSettings(next);
+                onGridSettingsChange?.(next);
+                setSnackbarOpen(true);
+              }}
+            />
+            <FormControl size="small">
+              <InputLabel id="group-by-label">{t('group_by_label') || 'Group by'}</InputLabel>
+              <Select
+                labelId="group-by-label"
+                value={localGridSettings.groupBy}
+                label={t('group_by_label') || 'Group by'}
+                onChange={(e) => {
+                  const next = { ...localGridSettings, groupBy: e.target.value as any };
+                  setLocalGridSettings(next);
+                  onGridSettingsChange?.(next);
+                  setSnackbarOpen(true);
+                }}
+              >
+                <MenuItem value="day">{t('day') || 'Day'}</MenuItem>
+                <MenuItem value="week">{t('week') || 'Week'}</MenuItem>
+                <MenuItem value="month">{t('month') || 'Month'}</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary">{t('row_height_helper')}</Typography>
+            <Typography variant="body2" color="text.secondary">{t('gap_helper')}</Typography>
+            <Typography variant="body2" color="text.secondary">{t('group_by_helper')}</Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button onClick={() => {
+              const defaults = { rowHeight: 220, gap: 12, groupBy: 'day' } as any;
+              setLocalGridSettings(defaults);
+              onGridSettingsChange?.(defaults);
+              setSnackbarOpen(true);
+            }}>{t('reset_button') || 'Reset to defaults'}</Button>
+          </Box>
+          <Snackbar open={snackbarOpen} autoHideDuration={2000} onClose={() => setSnackbarOpen(false)}>
+            <Alert onClose={() => setSnackbarOpen(false)} severity="success" sx={{ width: '100%' }}>
+              {t('settings_saved') || 'Settings saved'}
+            </Alert>
+          </Snackbar>
           <DataSourceList onEdit={handleEdit} onSync={handleSync} />
         </DialogContent>
         <DialogActions>

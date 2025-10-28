@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useDispatch } from 'react-redux';
 import { ThemeProvider, styled, alpha } from '@mui/material/styles';
+import Slide from '@mui/material/Slide';
 import CssBaseline from '@mui/material/CssBaseline';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
@@ -108,6 +109,9 @@ function App() {
   const [gridKey, setGridKey] = useState(0); // 用于强制重载图片网格
   const [sourcesToVerify, setSourcesToVerify] = useState<DataSource[]>([]); // 需要重新授权的本地数据源
   const [serverSources, setServerSources] = useState<DataSource[]>([]);
+  const [gridSettings, setGridSettings] = useState<{ rowHeight: number; gap: number; groupBy: 'day'|'week'|'month' }>({ rowHeight: 220, gap: 12, groupBy: 'day' });
+  const [hideAppBar, setHideAppBar] = useState(false);
+  const lastScrollY = useRef<number>(0);
 
   // 搜索提交
   const handleSearchSubmit = () => {
@@ -115,6 +119,24 @@ function App() {
   };
   
   // 新增：从后端获取服务端数据源
+  useEffect(() => {
+    // Auto-hide AppBar on scroll down, show on scroll up
+    const onScroll = () => {
+      const currentY = window.scrollY || window.pageYOffset;
+      if (currentY > lastScrollY.current + 10) {
+        // scrolled down
+        setHideAppBar(true);
+      } else if (currentY < lastScrollY.current - 10) {
+        // scrolled up
+        setHideAppBar(false);
+      }
+      lastScrollY.current = currentY;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // 新增：从后端获取服务端数据
   useEffect(() => {
     const fetchServerData = async () => {
       try {
@@ -131,6 +153,33 @@ function App() {
     };
     fetchServerData();
   }, []);
+
+  // Load persisted grid settings from DB (if any)
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const entry = await db.settings.get('gridSettings');
+        if (entry && entry.value) {
+          setGridSettings(entry.value);
+        }
+      } catch (e) {
+        console.warn('Failed to load grid settings:', e);
+      }
+    };
+    load();
+  }, []);
+
+  // Persist grid settings whenever they change
+  useEffect(() => {
+    const save = async () => {
+      try {
+        await db.settings.put({ key: 'gridSettings', value: gridSettings });
+      } catch (e) {
+        console.warn('Failed to save grid settings:', e);
+      }
+    };
+    save();
+  }, [gridSettings]);
 
   // 回车触发搜索
   const handleSearchKeyDown = (event: React.KeyboardEvent) => {
@@ -274,9 +323,10 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      {/* 顶部应用栏 */}
-      <AppBar position="static">
-        <Toolbar>
+      {/* 顶部应用栏（自动隐藏/显示） */}
+      <Slide appear={false} direction="down" in={!hideAppBar}>
+        <AppBar position="sticky"> 
+          <Toolbar>
           <Typography
             variant="h6"
             noWrap
@@ -302,8 +352,9 @@ function App() {
           <IconButton color="inherit" onClick={handleGlobalRefresh} disabled={isScanning}><RefreshIcon /></IconButton>
           {/* 设置按钮 */}
           <IconButton color="inherit" onClick={() => setSettingsOpen(true)} disabled={isScanning}><SettingsIcon /></IconButton>
-        </Toolbar>
-      </AppBar>
+          </Toolbar>
+        </AppBar>
+      </Slide>
       {/* 主体内容区 */}
       <Container component="main" sx={{ mt: 2, mb: 2 }} maxWidth={false}>
         {/* 数据源筛选标签 */}
@@ -315,7 +366,10 @@ function App() {
             searchTerm={searchTerm}
             serverSources={serverSources}
             onPictureClick={handlePictureClick} 
-            onPicturesLoaded={handlePicturesLoaded} 
+            onPicturesLoaded={handlePicturesLoaded}
+            rowHeight={gridSettings.rowHeight}
+            gap={gridSettings.gap}
+            groupBy={gridSettings.groupBy}
           />
         </ErrorBoundary>
       </Container>
@@ -325,6 +379,8 @@ function App() {
         onClose={() => setSettingsOpen(false)} 
         onScanRequest={handleRefresh}
         onSyncSingleSource={handleSyncSingleSource}
+        gridSettings={gridSettings}
+        onGridSettingsChange={(next) => setGridSettings(next)}
       />
       {/* 全屏图片查看器 */}
       <FullscreenViewer 

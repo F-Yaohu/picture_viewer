@@ -69,5 +69,18 @@
   "max_images_label": "最大图片数量 (可选)",
   "max_images_helper": "同步时导入的最大图片数量。留空则无限制。",
   "base_url_label": "图片基础URL (可选)",
-  "base_url_helper": "如果API返回的是相对路径，请在此处填写基础URL用于拼接。"
+  "base_url_helper": "如果API返回的是相对路径，请在此处填写基础URL用于拼接。",
+  "row_height_label": "行高",
+  "row_height_helper": "每行目标高度（像素）。降低该值会让每行显示更多图片，增大则让图片看起来更大。建议 150-300 之间。",
+  "gap_label": "图片间距",
+  "gap_helper": "图片之间的间隙（像素）。默认 12。",
+  "group_by_label": "按时间分组",
+  "group_by_helper": "选择按天/周/月对图片进行分组展示，按周或按月便于跨日期浏览大量图片。",
+  "day": "天",
+  "week": "周",
+  "month": "月"
+  ,
+  "reset_button": "重置为默认"
+  ,
+  "settings_saved": "设置已保存"
 }
