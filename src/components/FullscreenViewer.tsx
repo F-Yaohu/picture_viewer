@@ -20,12 +20,12 @@ const MAX_SCALE = 5;
 function PictureDetails({ picture }: { picture: Picture }) {
   const source = useLiveQuery(() => db.dataSources.get(picture.sourceId), [picture.sourceId]);
   return (
-    <Paper sx={{ p: 2, mt: 2, bgcolor: 'rgba(0, 0, 0, 0.3)' }}>
-      <Typography variant="h6" sx={{ wordBreak: 'break-all' }}>{picture.name}</Typography>
-      <Typography variant="body2" color="text.secondary">Source: {source?.name}</Typography>
-      <Typography variant="body2" color="text.secondary">Date: {new Date(picture.modified).toLocaleString()}</Typography>
-      {picture.size && <Typography variant="body2" color="text.secondary">Size: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
-      {(picture.width && picture.height) && <Typography variant="body2" color="text.secondary">Dimensions: {picture.width} x {picture.height}</Typography>}
+    <Paper sx={{ p: 2, mt: 2, bgcolor: 'rgba(0, 0, 0, 0.5)', color: 'common.white' }}>
+      <Typography variant="h6" sx={{ wordBreak: 'break-all', color: 'common.white' }}>{picture.name}</Typography>
+      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)' }}>Source: {source?.name}</Typography>
+      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Date: {new Date(picture.modified).toLocaleString()}</Typography>
+      {picture.size && <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Size: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
+      {(picture.width && picture.height) && <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Dimensions: {picture.width} x {picture.height}</Typography>}
     </Paper>
   );
 }
@@ -180,8 +180,8 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
   return (
     <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent' } }}>
       <AppBar sx={{ position: 'relative', background: 'rgba(0,0,0,0.5)' }}>
-        <Toolbar>
-          <Typography sx={{ ml: 2, flex: 1 }} variant="h6" component="div">{picture?.name || 'Image Viewer'}</Typography>
+          <Toolbar>
+            <Typography sx={{ ml: 2, flex: 1, color: 'common.white' }} variant="h6" component="div">{picture?.name || 'Image Viewer'}</Typography>
           <IconButton color="inherit" onClick={handleReset} aria-label="reset zoom"><ZoomInMapIcon /></IconButton>
           <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close"><CloseIcon /></IconButton>
         </Toolbar>

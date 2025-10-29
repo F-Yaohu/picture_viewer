@@ -331,7 +331,7 @@ function App() {
             variant="h6"
             noWrap
             component="div"
-            sx={{ flexGrow: 1, display: { xs: 'none', sm: 'block' } }}
+            sx={{ flexGrow: 1, display: { xs: 'none', sm: 'block' }, color: '#0f1724' }}
           >
             {t('app_title')}
           </Typography>
