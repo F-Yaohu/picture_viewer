@@ -10,6 +10,8 @@ import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
 import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
 import InfoIcon from '@mui/icons-material/Info';
 import Box from '@mui/material/Box';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import Paper from '@mui/material/Paper';
 // Drawer replaced by inline Paper panel; keep Paper import above
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -152,6 +154,70 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
 
   // Fetch source info for the current picture for compact info display
   const source = useLiveQuery(() => (picture ? db.dataSources.get(picture.sourceId) : undefined), [picture?.sourceId]);
+
+  // Privacy setting: hide GPS (stored in settings table)
+  const hideGPSEntry = useLiveQuery(() => db.settings.get('hideGPS'), []);
+  const hideGPS = !!hideGPSEntry?.value;
+
+  const setHideGPS = async (v: boolean) => {
+    try {
+      await db.settings.put({ key: 'hideGPS', value: v });
+    } catch (e) {
+      console.warn('Failed to update hideGPS setting', e);
+    }
+  };
+
+  // EXIF data state (viewer relies only on DB-stored EXIF; no on-demand parsing)
+  const [exifData, setExifData] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!picture) {
+      setExifData(null);
+      return;
+    }
+    // Use DB-stored exifRaw (scan worker should populate exifRaw for local files)
+    setExifData((picture as any).exifRaw || null);
+  }, [picture]);
+
+  // Normalize GPS values for display (avoid NaN)
+  const computeGPS = () => {
+    // Prefer DB-stored numeric GPS fields (scan worker writes exifGPSLat/exifGPSLon)
+    if (picture && typeof (picture as any).exifGPSLat === 'number' && typeof (picture as any).exifGPSLon === 'number') {
+      return { lat: (picture as any).exifGPSLat as number, lon: (picture as any).exifGPSLon as number };
+    }
+    if (!exifData) return { lat: undefined as number|undefined, lon: undefined as number|undefined };
+    const toDecimal = (v: any) => {
+      if (v == null) return undefined;
+      if (typeof v === 'number') return v;
+      if (Array.isArray(v)) {
+        const [deg, min, sec] = v.map((n: any) => Number(n || 0));
+        if (Number.isFinite(deg)) return deg + (min || 0) / 60 + (sec || 0) / 3600;
+        return undefined;
+      }
+      const parsed = Number(v);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+
+    let lat = undefined as number | undefined;
+    let lon = undefined as number | undefined;
+
+    if (typeof exifData.latitude === 'number' && typeof exifData.longitude === 'number') {
+      lat = exifData.latitude;
+      lon = exifData.longitude;
+    } else {
+      lat = toDecimal(exifData.GPSLatitude ?? exifData.gpsLatitude ?? exifData.lat ?? exifData.gps?.latitude);
+      lon = toDecimal(exifData.GPSLongitude ?? exifData.gpsLongitude ?? exifData.lon ?? exifData.gps?.longitude);
+      // apply refs if present
+      const latRef = exifData.GPSLatitudeRef || exifData.gpsLatitudeRef || exifData.latRef || exifData.LatitudeRef;
+      const lonRef = exifData.GPSLongitudeRef || exifData.gpsLongitudeRef || exifData.lonRef || exifData.LongitudeRef;
+      if (lat != null && typeof latRef === 'string' && latRef.toUpperCase() === 'S') lat = -Math.abs(lat);
+      if (lon != null && typeof lonRef === 'string' && lonRef.toUpperCase() === 'W') lon = -Math.abs(lon);
+    }
+
+    return { lat, lon };
+  };
+
+  const { lat: gpsLat, lon: gpsLon } = computeGPS();
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -317,10 +383,57 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
               </Typography>
             </Box>
 
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.9)', display: 'block' }}>Source: {source?.name || '—'}</Typography>
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Date: {new Date(picture.modified).toLocaleString()}</Typography>
-            {(picture.width && picture.height) && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Dimensions: {picture.width} × {picture.height}</Typography>}
-            {picture.size && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Size: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.9)', display: 'block' }}>来源: {source?.name || '—'}</Typography>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>日期: {new Date(picture.modified).toLocaleString()}</Typography>
+            {(picture.width && picture.height) && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>尺寸: {picture.width} × {picture.height}</Typography>}
+            {picture.size && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>文件大小: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
+            {/* EXIF fields (if available) */}
+            {/* EXIF fields (分组显示，增加行间距以避免混乱) */}
+            {exifData ? (
+              <>
+                {/* 基本相机信息 */}
+                {(exifData.Make || exifData.Model) && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>相机: {exifData.Make || ''} {exifData.Model || ''}</Typography>
+                  </Box>
+                )}
+
+                {/* 拍摄参数 */}
+                <Box sx={{ mt: 1 }}>
+                  {exifData.CreateDate && (
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>拍摄时间: {new Date(exifData.CreateDate).toLocaleString()}</Typography>
+                  )}
+                  {exifData.ISO && (
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>ISO: {exifData.ISO}</Typography>
+                  )}
+                  {exifData.FNumber && (
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>光圈: f/{exifData.FNumber}</Typography>
+                  )}
+                  {exifData.ExposureTime && (
+                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>快门: {String(exifData.ExposureTime)}</Typography>
+                  )}
+                </Box>
+
+                {/* GPS 单独一块 */}
+                { (gpsLat != null && gpsLon != null) ? (
+                  <Box sx={{ mt: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>位置 (GPS)</Typography>
+                      <IconButton onClick={() => setHideGPS(!hideGPS)} sx={{ color: 'rgba(255,255,255,0.9)', p: 0.5 }} aria-label={hideGPS ? '显示位置' : '隐藏位置'}>
+                        {hideGPS ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                      </IconButton>
+                    </Box>
+                    {!hideGPS ? (
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.85)', display: 'block' }}>{gpsLat.toFixed(6)}, {gpsLon.toFixed(6)}</Typography>
+                    ) : (
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', display: 'block' }}>位置已隐藏（敏感信息）</Typography>
+                    )}
+                  </Box>
+                ) : null}
+              </>
+            ) : (
+              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)', display: 'block', mt: 1 }}>EXIF: 不可用</Typography>
+            )}
             {typeof picture.path === 'string' && (
               <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', mt: 0.5, wordBreak: 'break-all' }}>{picture.path}</Typography>
             )}

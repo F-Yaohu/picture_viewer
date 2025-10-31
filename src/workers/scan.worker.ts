@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { type Picture, type DataSource } from '../db/db';
+import * as exifr from 'exifr';
 
 // --- Type Definitions ---
 const SUPPORTED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
@@ -48,6 +49,20 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
     } else {
       // File is new or updated, process it.
       const dimensions = await getImageDimensions(file);
+      // parse EXIF (best-effort) for local files to store useful metadata
+      let exif: any = null;
+      try {
+        const buffer = await file.arrayBuffer();
+        // Parse only common EXIF tags to keep parsing fast and lightweight
+        exif = await exifr.parse(buffer, [
+          'Make', 'Model', 'DateTimeOriginal', 'CreateDate',
+          'ISO', 'ISOSpeedRatings', 'FNumber', 'ApertureValue', 'ExposureTime',
+          'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef'
+        ]).catch(() => null);
+      } catch (e) {
+        exif = null;
+      }
+
       const pictureData: Omit<Picture, 'id'> = {
         sourceId: source.id!,
         name: file.name,
@@ -56,6 +71,16 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
         size: file.size,
         width: dimensions.width,
         height: dimensions.height,
+        // map common EXIF fields if present
+        exifMake: exif?.Make || exif?.make || undefined,
+        exifModel: exif?.Model || exif?.model || undefined,
+        exifCreateDate: exif?.DateTimeOriginal ? (new Date(exif.DateTimeOriginal).getTime()) : (exif?.CreateDate ? (new Date(exif.CreateDate).getTime()) : undefined),
+        exifISO: exif?.ISO || exif?.ISOSpeedRatings || undefined,
+        exifFNumber: exif?.FNumber || exif?.ApertureValue || undefined,
+        exifExposureTime: exif?.ExposureTime || undefined,
+        exifGPSLat: exif?.latitude || (Array.isArray(exif?.GPSLatitude) ? (() => { const [d,m,s]=exif.GPSLatitude; return d + m/60 + s/3600; })() : undefined) ,
+        exifGPSLon: exif?.longitude || (Array.isArray(exif?.GPSLongitude) ? (() => { const [d,m,s]=exif.GPSLongitude; return d + m/60 + s/3600; })() : undefined),
+        exifRaw: exif || undefined,
       };
       if (existing) {
         updates.push({ ...pictureData, id: existing.id });

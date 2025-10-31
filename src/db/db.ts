@@ -37,6 +37,16 @@ export interface Picture {
   size?: number;
   width?: number;
   height?: number;
+  // Optional EXIF fields persisted from scan
+  exifMake?: string;
+  exifModel?: string;
+  exifCreateDate?: number; // timestamp
+  exifISO?: number;
+  exifFNumber?: number;
+  exifExposureTime?: string | number;
+  exifGPSLat?: number;
+  exifGPSLon?: number;
+  exifRaw?: any; // raw exif object if needed
 }
 
 // Simple key/value settings store
@@ -76,6 +86,10 @@ export class PictureViewerDB extends Dexie {
     this.version(9).stores({}); // For baseURL addition
     this.version(10).stores({
       settings: 'key'
+    });
+    this.version(11).stores({
+      // Ensure pictures table exists with previous indexes; EXIF fields are stored but not indexed by default
+      pictures: '++id, name, sourceId, path, [modified+name], [sourceId+modified]'
     });
   }
 }

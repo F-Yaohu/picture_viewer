@@ -20,6 +20,7 @@
     "dexie": "^4.0.11",
     "dexie-react-hooks": "^1.1.7",
     "dotenv": "^17.2.1",
+  "exifr": "^6.1.0",
     "express": "^5.1.0",
     "i18next": "^25.3.2",
     "i18next-browser-languagedetector": "^8.2.0",
