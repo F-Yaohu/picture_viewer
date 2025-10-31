@@ -8,8 +8,10 @@ import CloseIcon from '@mui/icons-material/Close';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
 import ZoomInMapIcon from '@mui/icons-material/ZoomInMap';
+import InfoIcon from '@mui/icons-material/Info';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
+// Drawer replaced by inline Paper panel; keep Paper import above
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Picture } from '../db/db';
 
@@ -17,18 +19,7 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 5;
 
 
-function PictureDetails({ picture }: { picture: Picture }) {
-  const source = useLiveQuery(() => db.dataSources.get(picture.sourceId), [picture.sourceId]);
-  return (
-    <Paper sx={{ p: 2, mt: 2, bgcolor: 'rgba(0, 0, 0, 0.5)', color: 'common.white' }}>
-      <Typography variant="h6" sx={{ wordBreak: 'break-all', color: 'common.white' }}>{picture.name}</Typography>
-      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.85)' }}>Source: {source?.name}</Typography>
-      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Date: {new Date(picture.modified).toLocaleString()}</Typography>
-      {picture.size && <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Size: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
-      {(picture.width && picture.height) && <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.75)' }}>Dimensions: {picture.width} x {picture.height}</Typography>}
-    </Paper>
-  );
-}
+
 
 interface FullscreenViewerProps {
   open: boolean;
@@ -39,6 +30,7 @@ interface FullscreenViewerProps {
 
 export default function FullscreenViewer({ open, onClose, picture, onNavigate }: FullscreenViewerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // States for zoom and pan
   const [scale, setScale] = useState(1);
@@ -47,6 +39,49 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const infoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelStyle, setPanelStyle] = useState<{ top: number; left: number } | null>(null);
+
+  // compute and update the panel position so it appears under the Info button
+  useEffect(() => {
+    const compute = () => {
+      if (!detailsOpen || !infoButtonRef.current) {
+        setPanelStyle(null);
+        return;
+      }
+      const rect = infoButtonRef.current.getBoundingClientRect();
+      const panelWidth = 280;
+      const margin = 8;
+      let left = rect.left + rect.width / 2 - panelWidth / 2;
+      if (left < margin) left = margin;
+      if (left + panelWidth > window.innerWidth - margin) left = window.innerWidth - panelWidth - margin;
+      const top = rect.bottom + 6;
+      setPanelStyle({ top, left });
+    };
+
+    compute();
+    window.addEventListener('resize', compute);
+    window.addEventListener('scroll', compute, true);
+    return () => {
+      window.removeEventListener('resize', compute);
+      window.removeEventListener('scroll', compute, true);
+    };
+  }, [detailsOpen, picture]);
+
+  // close the panel when clicking outside the button or the panel
+  useEffect(() => {
+    const onDocDown = (e: MouseEvent) => {
+      if (!detailsOpen) return;
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (panelRef.current && panelRef.current.contains(target)) return;
+      if (infoButtonRef.current && infoButtonRef.current.contains(target)) return;
+      setDetailsOpen(false);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [detailsOpen]);
 
   const handleReset = useCallback(() => {
     setScale(1);
@@ -115,6 +150,9 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
     onNavigate(direction);
   }, [picture, onNavigate]);
 
+  // Fetch source info for the current picture for compact info display
+  const source = useLiveQuery(() => (picture ? db.dataSources.get(picture.sourceId) : undefined), [picture?.sourceId]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
@@ -178,28 +216,51 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
   }, [imageUrl]);
 
   return (
-    <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent' } }}>
-      <AppBar sx={{ position: 'relative', background: 'rgba(0,0,0,0.5)' }}>
-          <Toolbar>
-            <Typography sx={{ ml: 2, flex: 1, color: 'common.white' }} variant="h6" component="div">{picture?.name || 'Image Viewer'}</Typography>
-          <IconButton color="inherit" onClick={handleReset} aria-label="reset zoom"><ZoomInMapIcon /></IconButton>
-          <IconButton edge="end" color="inherit" onClick={onClose} aria-label="close"><CloseIcon /></IconButton>
+    <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent', borderRadius: 0 } }}>
+  <AppBar sx={{
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    borderRadius: 0,
+    height: '92px',
+    // Softer, smoother gradient with multiple stops for less abrupt transition
+    background: 'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.26) 30%, rgba(0,0,0,0.08) 60%, rgba(0,0,0,0) 100%)',
+    zIndex: 1500,
+    // reduce blur to make the gradient crisper but still provide slight backdrop separation
+    backdropFilter: 'blur(1px)'
+  }}>
+        <Toolbar sx={{ position: 'relative', minHeight: 88, alignItems: 'center' }}>
+          <Typography
+            sx={{ ml: 2, flex: 1, color: 'common.white', fontSize: '0.95rem', maxWidth: '40ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pr: '180px' }}
+            variant="h6"
+            component="div"
+            title={picture?.name}
+          >
+            {picture?.name || 'Image Viewer'}
+          </Typography>
+
+          <Box sx={{ position: 'absolute', right: 8, top: 0, height: '100%', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <IconButton ref={(el: HTMLButtonElement | null) => { infoButtonRef.current = el }} sx={{ color: 'rgba(255,255,255,0.95)' }} onClick={() => setDetailsOpen(prev => !prev)} aria-label="toggle details">
+              <InfoIcon />
+            </IconButton>
+            <IconButton sx={{ color: 'rgba(255,255,255,0.95)' }} onClick={handleReset} aria-label="reset zoom"><ZoomInMapIcon /></IconButton>
+            <IconButton edge="end" sx={{ color: 'rgba(255,255,255,0.95)' }} onClick={onClose} aria-label="close"><CloseIcon /></IconButton>
+          </Box>
         </Toolbar>
       </AppBar>
-      <Box sx={{ display: 'flex', height: 'calc(100% - 64px)', bgcolor: 'rgba(0,0,0,0.8)' }}>
-        <IconButton onClick={() => handleNavigation('prev')} sx={{ color: 'white', my: 'auto', zIndex: 1 }}><ArrowBackIosNewIcon fontSize="large" /></IconButton>
+  <Box sx={{ display: 'flex', height: '100%', bgcolor: 'rgba(0,0,0,0.8)', position: 'relative', overflow: 'hidden' }}>
+    <IconButton onClick={() => handleNavigation('prev')} sx={{ color: 'white', my: 'auto', zIndex: 1400 }}><ArrowBackIosNewIcon fontSize="large" /></IconButton>
         <Box 
           ref={imageContainerRef}
           tabIndex={-1} // Make the container focusable
           sx={{ 
             flex: 1, 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            p: 1, 
-            overflow: 'hidden', 
+            display: 'block',
+            p: 1,
             outline: 'none', // Remove the focus outline
-            cursor: isDragging ? 'grabbing' : (scale > 1 ? 'grab' : 'default')
+            cursor: isDragging ? 'grabbing' : (scale > 1 ? 'grab' : 'default'),
+            position: 'relative'
           }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -207,26 +268,64 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
           onMouseLeave={handleMouseUp} // End drag if mouse leaves the area
         >
           {imageUrl ? (
-            <img 
+            <img
               ref={imageRef}
-              src={imageUrl} 
-              alt={picture?.name} 
-              style={{ 
-                maxHeight: '100%', 
-                maxWidth: '100%', 
-                objectFit: 'contain',
-                transform: `scale(${scale}) translate(${position.x}px, ${position.y}px)`,
+              src={imageUrl}
+              alt={picture?.name}
+              onDoubleClick={handleDoubleClick}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: `translate(-50%, -50%) translate(${position.x}px, ${position.y}px) scale(${scale})`,
+                transformOrigin: 'center center',
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                height: 'auto',
+                display: 'block',
                 transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                willChange: 'transform',
                 cursor: 'inherit'
               }}
-              onDoubleClick={handleDoubleClick}
             />
           ) : <Typography>Loading...</Typography>}
         </Box>
-        <IconButton onClick={() => handleNavigation('next')} sx={{ color: 'white', my: 'auto', zIndex: 1 }}><ArrowForwardIosIcon fontSize="large" /></IconButton>
-        <Box sx={{ width: '320px', p: 2, overflowY: 'auto', position: 'absolute', right: 0, top: '64px', height: 'calc(100% - 64px)' }}>
-          {picture && <PictureDetails picture={picture} />}
-        </Box>
+  <IconButton onClick={() => handleNavigation('next')} sx={{ color: 'white', my: 'auto', zIndex: 1400 }}><ArrowForwardIosIcon fontSize="large" /></IconButton>
+        {/* Compact centered info card (shows only key info in the middle) */}
+        {detailsOpen && picture && (
+          <Paper
+            ref={(el: HTMLDivElement | null) => { panelRef.current = el }}
+            sx={{
+              position: 'absolute',
+              zIndex: 1600,
+              width: 280,
+              maxWidth: '80vw',
+              bgcolor: 'rgba(0,0,0,0.6)',
+              color: 'common.white',
+              p: 1.5,
+              boxShadow: 3,
+              borderRadius: 1,
+            }}
+            role="dialog"
+            aria-label="picture details"
+            style={panelStyle ? { top: `${panelStyle.top}px`, left: `${panelStyle.left}px` } : { display: 'none' }}
+          >
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+              <Typography variant="subtitle2" sx={{ color: 'common.white', fontWeight: 600, maxWidth: '26ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={picture.name}>
+                {picture.name}
+              </Typography>
+            </Box>
+
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.9)', display: 'block' }}>Source: {source?.name || '—'}</Typography>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Date: {new Date(picture.modified).toLocaleString()}</Typography>
+            {(picture.width && picture.height) && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Dimensions: {picture.width} × {picture.height}</Typography>}
+            {picture.size && <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', display: 'block' }}>Size: {(picture.size / 1024 / 1024).toFixed(2)} MB</Typography>}
+            {typeof picture.path === 'string' && (
+              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', mt: 0.5, wordBreak: 'break-all' }}>{picture.path}</Typography>
+            )}
+          </Paper>
+        )}
       </Box>
     </Dialog>
   );
