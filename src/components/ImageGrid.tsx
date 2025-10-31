@@ -22,48 +22,103 @@ function useResizeObserver(ref: any, callback: (entry: ResizeObserverEntry) => v
 
 const PictureCard = ({ data, width, height }: { data: Picture, width: number, height: number }) => {
   const [imageUrl, setImageUrl] = useState<string | undefined>(() => {
-    // For remote images, the path is the URL. For local, we check the cache.
-    return typeof data.path === 'string' ? data.path : imageUrlCache.get(data.id!);
+    // For remote images, the path is the URL. For local, we prefer thumbnail cache or undefined.
+    return typeof data.path === 'string' ? data.path : imageUrlCache.getThumb(data.id!, Math.round(width));
   });
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // PictureCard now receives explicit width and height from the layout algorithm.
-
+  // Create a small thumbnail for local files only when the card becomes visible.
   useEffect(() => {
-    let isMounted = true;
-    // Only create an Object URL for local files (if not already cached and not a remote URL)
-    if (!imageUrl && typeof data.path !== 'string') {
-      const createUrl = async () => {
-        if (data.path) {
-          try {
-            const fileHandle = data.path as unknown as FileSystemFileHandle;
-            const file = await fileHandle.getFile();
-            const newUrl = URL.createObjectURL(file);
-            if (isMounted) {
-              imageUrlCache.set(data.id!, newUrl);
-              setImageUrl(newUrl);
-            }
-          } catch (error) { console.error('Failed to create object URL:', error); }
-        }
-      };
-      createUrl();
+    if (typeof data.path === 'string') {
+      // remote URL — we already returned it above
+      return;
     }
-    return () => { isMounted = false; };
-  }, [data.id, data.path, imageUrl]); // Depend on data.id and data.path
 
+    let mounted = true;
+    let observer: IntersectionObserver | null = null;
+
+    const ensureThumb = async () => {
+      if (!mounted) return;
+      const existing = imageUrlCache.getThumb(data.id!, Math.round(width));
+      if (existing) {
+        setImageUrl(existing);
+        return;
+      }
+
+      try {
+        const fileHandle = data.path as unknown as FileSystemFileHandle;
+        const file = await fileHandle.getFile();
+        // CreateImageBitmap is often faster than loading into <img>
+        const bitmap = await createImageBitmap(file);
+        // Target thumbnail width based on layout width and device pixel ratio
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const targetW = Math.max(40, Math.round(width * dpr));
+        const scale = targetW / bitmap.width;
+        const targetH = Math.max(40, Math.round(bitmap.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+          // toBlob may be async; wrap in promise
+          const blob: Blob | null = await new Promise(resolve => canvas.toBlob(resolve as any, 'image/webp', 0.75));
+          if (blob) {
+            const objUrl = URL.createObjectURL(blob);
+            imageUrlCache.setThumb(data.id!, Math.round(width), objUrl);
+            if (mounted) setImageUrl(objUrl);
+          }
+        }
+        bitmap.close();
+      } catch (e) {
+        console.warn('Thumbnail generation failed, falling back to full object URL', e);
+        try {
+          const fileHandle = data.path as unknown as FileSystemFileHandle;
+          const file = await fileHandle.getFile();
+          const fullUrl = URL.createObjectURL(file);
+          imageUrlCache.set(data.id!, fullUrl);
+          if (mounted) setImageUrl(fullUrl);
+        } catch (err) { console.error('Failed to create fallback object URL:', err); }
+      }
+    };
+
+    // Only generate thumbnail when the element is visible to avoid decoding many images at once
+    const el = containerRef.current;
+    if (el && typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            // stop observing once visible
+            observer?.disconnect();
+            ensureThumb();
+          }
+        }
+      }, { rootMargin: '400px' });
+      observer.observe(el);
+    } else {
+      // Fallback: just ensure thumb immediately
+      ensureThumb();
+    }
+
+    return () => { mounted = false; observer?.disconnect(); };
+  }, [data, width]);
 
   if (!imageUrl) {
-    // Render a placeholder with the correct, pre-calculated height.
-    return <div style={{ width, height, backgroundColor: '#333', borderRadius: '4px' }} />;
+    // Render a placeholder with correct pre-calculated height.
+    return <div ref={containerRef} style={{ width, height, backgroundColor: '#eee', borderRadius: '6px' }} />;
   }
 
   return (
-    <Box sx={{ position: 'relative', cursor: 'pointer', borderRadius: 1, overflow: 'hidden', width, height, '&:hover .overlay': { opacity: 1 } }}>
-      <img src={imageUrl} alt={data.name} loading="lazy" style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
-      <Box className="overlay" sx={{ position: 'absolute', left: 0, right: 0, bottom: 0, p: 1, opacity: 0, transition: 'opacity 200ms ease-in-out', background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 70%, rgba(0,0,0,0) 100%)' }}>
-        <Typography variant="body2" color="white" noWrap>{data.name}</Typography>
-        <Typography variant="caption" color="white">{new Date(data.modified).toLocaleDateString()}</Typography>
+    <div ref={containerRef}>
+      <Box sx={{ position: 'relative', cursor: 'pointer', borderRadius: 1, overflow: 'hidden', width, height, '&:hover .overlay': { opacity: 1 } }}>
+        <img src={imageUrl} alt={data.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
+        <Box className="overlay" sx={{ position: 'absolute', left: 0, right: 0, bottom: 0, p: 1, opacity: 0, transition: 'opacity 200ms ease-in-out', background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 70%, rgba(0,0,0,0) 100%)' }}>
+          <Typography variant="body2" color="white" noWrap>{data.name}</Typography>
+          <Typography variant="caption" color="white">{new Date(data.modified).toLocaleDateString()}</Typography>
+        </Box>
       </Box>
-    </Box>
+    </div>
   );
 };
 
@@ -159,12 +214,37 @@ export default function ImageGrid({ filterSourceId, searchTerm, serverSources, o
       }
     }
 
+    // Deduplicate newItems against themselves first (keep first occurrence)
+    const getKey = (p: Picture) => (typeof p.path === 'string' ? `${p.sourceId}|${p.path}` : `${p.sourceId}|${p.name}`);
+    const seen = new Set<string>();
+    const dedupedBatch: Picture[] = [];
+    for (const p of newItems) {
+      const k = getKey(p);
+      if (!seen.has(k)) {
+        seen.add(k);
+        dedupedBatch.push(p);
+      }
+    }
+
     hasMoreRef.current = hasMore;
 
     if (startIndex === 0) {
-      setItems(newItems);
+      // Replace items with the deduped incoming batch (no previous items to consider)
+      setItems(dedupedBatch);
     } else {
-      setItems(currentItems => [...currentItems, ...newItems]);
+      // Append only items that are not already present in the current state.
+      setItems(currentItems => {
+        const existing = new Set<string>(currentItems.map(it => getKey(it)));
+        const toAdd: Picture[] = [];
+        for (const p of dedupedBatch) {
+          const k = getKey(p);
+          if (!existing.has(k)) {
+            existing.add(k);
+            toAdd.push(p);
+          }
+        }
+        return toAdd.length > 0 ? [...currentItems, ...toAdd] : currentItems;
+      });
     }
   }, [filterSourceId, searchTerm, serverSources]);
   
