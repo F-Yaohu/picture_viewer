@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useDispatch } from 'react-redux';
 import { ThemeProvider, styled, alpha } from '@mui/material/styles';
 import Slide from '@mui/material/Slide';
@@ -23,7 +23,6 @@ import ImageGrid from './components/ImageGrid';
 import FullscreenViewer from './components/FullscreenViewer';
 import PermissionManager from './components/PermissionManager';
 import { ErrorBoundary } from './components/ErrorBoundary'; // 错误边界组件
-import FilterChips from './components/FilterChips';
 import { db, type DataSource, type Picture } from './db/db';
 import { imageUrlCache } from './utils/imageUrlCache';
 import { setSources } from './store/slices/dataSourceSlice';
@@ -99,7 +98,6 @@ function App() {
   const [viewerOpen, setViewerOpen] = useState(false); // 全屏图片查看器开关
   const [currentPicture, setCurrentPicture] = useState<Picture | null>(null); // 当前查看图片对象
   const [sortedPictures, setSortedPictures] = useState<Picture[]>([]); // Store the full picture objects for navigation
-  const [filterSourceId, setFilterSourceId] = useState<number | 'all'>('all'); // 数据源筛选
   const [searchTerm, setSearchTerm] = useState(''); // 搜索关键词
   const [inputValue, setInputValue] = useState(''); // 搜索输入框内容
   
@@ -109,6 +107,7 @@ function App() {
   const [gridKey, setGridKey] = useState(0); // 用于强制重载图片网格
   const [sourcesToVerify, setSourcesToVerify] = useState<DataSource[]>([]); // 需要重新授权的本地数据源
   const [serverSources, setServerSources] = useState<DataSource[]>([]);
+  const selectedSourceSetting = useLiveQuery(() => db.settings.get('selectedSourceIds'), []);
   const [gridSettings, setGridSettings] = useState<{ rowHeight: number; gap: number; groupBy: 'day'|'week'|'month' }>({ rowHeight: 220, gap: 12, groupBy: 'day' });
   const [hideAppBar, setHideAppBar] = useState(false);
   const lastScrollY = useRef<number>(0);
@@ -253,6 +252,54 @@ function App() {
 
   // 监听数据源变化，同步到redux
   const dbDataSources = useLiveQuery(() => db.dataSources.toArray(), []);
+  const allSourceIds = useMemo(() => {
+    const ids: number[] = [];
+    if (dbDataSources) {
+      for (const s of dbDataSources) {
+        if (typeof s.id === 'number') ids.push(s.id);
+      }
+    }
+    for (const s of serverSources) {
+      if (typeof s.id === 'number') ids.push(s.id);
+    }
+    return ids;
+  }, [dbDataSources, serverSources]);
+
+  const storedSelectedIds = selectedSourceSetting?.value as number[] | undefined;
+  const effectiveSelectedIds = useMemo(() => {
+    if (!allSourceIds || allSourceIds.length === 0) return [];
+    if (!storedSelectedIds) return allSourceIds;
+
+    const allSet = new Set(allSourceIds);
+    const ordered: number[] = [];
+    const seen = new Set<number>();
+
+    for (const id of storedSelectedIds) {
+      if (allSet.has(id) && !seen.has(id)) {
+        ordered.push(id);
+        seen.add(id);
+      }
+    }
+
+    return ordered;
+  }, [storedSelectedIds, allSourceIds]);
+
+  const handleSelectionChange = async (ids: number[]) => {
+    const validIds = new Set(allSourceIds);
+    const deduped: number[] = [];
+    const seen = new Set<number>();
+    for (const id of ids) {
+      if (validIds.has(id) && !seen.has(id)) {
+        deduped.push(id);
+        seen.add(id);
+      }
+    }
+    try {
+      await db.settings.put({ key: 'selectedSourceIds', value: deduped });
+    } catch (e) {
+      console.warn('Failed to persist selected sources', e);
+    }
+  };
   useEffect(() => {
     if (dbDataSources) {
       // 只序列化path为name，避免存储不可序列化对象
@@ -288,8 +335,6 @@ function App() {
   };
 
   // 合并客户端和服务端数据源
-  const combinedSources = [...(dbDataSources || []), ...serverSources];
-
   // 本地文件夹重新授权完成后回调
   const handleVerificationComplete = () => {
     setSourcesToVerify([]);
@@ -358,11 +403,11 @@ function App() {
       {/* 主体内容区 */}
       <Container component="main" sx={{ mt: 2, mb: 2 }} maxWidth={false}>
         {/* 数据源筛选标签 */}
-        <FilterChips allSources={combinedSources} selectedSourceId={filterSourceId} onSourceChange={setFilterSourceId} />
         {/* 错误边界包裹图片网格，防止渲染异常导致页面崩溃 */}
         <ErrorBoundary key={gridKey}>
           <ImageGrid 
-            filterSourceId={filterSourceId}
+            dataSources={dbDataSources || []}
+            selectedSourceIds={effectiveSelectedIds}
             searchTerm={searchTerm}
             serverSources={serverSources}
             onPictureClick={handlePictureClick} 
@@ -374,13 +419,17 @@ function App() {
         </ErrorBoundary>
       </Container>
       {/* 设置弹窗 */}
-      <SettingsDialog 
-        open={settingsOpen} 
-        onClose={() => setSettingsOpen(false)} 
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
         onScanRequest={handleRefresh}
         onSyncSingleSource={handleSyncSingleSource}
         gridSettings={gridSettings}
         onGridSettingsChange={(next) => setGridSettings(next)}
+        serverSources={serverSources}
+        selectedSourceIds={effectiveSelectedIds}
+        allSourceIds={allSourceIds}
+        onSelectedSourceIdsChange={handleSelectionChange}
       />
       {/* 全屏图片查看器 */}
       <FullscreenViewer 

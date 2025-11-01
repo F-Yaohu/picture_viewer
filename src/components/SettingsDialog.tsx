@@ -28,6 +28,10 @@ interface SettingsDialogProps {
   onSyncSingleSource: (source: DataSource) => void;
   gridSettings?: GridSettings;
   onGridSettingsChange?: (next: GridSettings) => void;
+  serverSources: DataSource[];
+  selectedSourceIds: number[];
+  allSourceIds: number[];
+  onSelectedSourceIdsChange: (ids: number[]) => void | Promise<void>;
 }
 
 declare global {
@@ -35,7 +39,7 @@ declare global {
   interface FileSystemDirectoryHandle { name: string; }
 }
 
-export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSingleSource, gridSettings, onGridSettingsChange }: SettingsDialogProps) {
+export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSingleSource, gridSettings, onGridSettingsChange, serverSources, selectedSourceIds, allSourceIds, onSelectedSourceIdsChange }: SettingsDialogProps) {
   const { t } = useTranslation();
   const [permissionDeniedOpen, setPermissionDeniedOpen] = useState(false);
   const [confirmRefreshOpen, setConfirmRefreshOpen] = useState(false);
@@ -135,6 +139,17 @@ export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSin
     onClose();
   };
 
+  const selectedCount = selectedSourceIds.length;
+  const totalCount = allSourceIds.length;
+
+  const handleSelectAll = () => {
+    void onSelectedSourceIdsChange([...allSourceIds]);
+  };
+
+  const handleClearSelection = () => {
+    void onSelectedSourceIdsChange([]);
+  };
+
   return (
     <>
       <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
@@ -216,7 +231,28 @@ export default function SettingsDialog({ open, onClose, onScanRequest, onSyncSin
               {t('settings_saved') || 'Settings saved'}
             </Alert>
           </Snackbar>
-          <DataSourceList onEdit={handleEdit} onSync={handleSync} />
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              {t('selected_sources_summary', { selected: selectedCount, total: totalCount, defaultValue: `${selectedCount} of ${totalCount} sources selected` })}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button size="small" variant="outlined" onClick={handleSelectAll} disabled={totalCount === 0}>
+                {t('select_all_sources', { defaultValue: 'Select all' })}
+              </Button>
+              <Button size="small" variant="outlined" onClick={handleClearSelection}>
+                {t('clear_selection', { defaultValue: 'Clear selection' })}
+              </Button>
+            </Box>
+          </Box>
+          <DataSourceList
+            serverSources={serverSources}
+            selectedSourceIds={selectedSourceIds}
+            allSourceIds={allSourceIds}
+            onSelectedSourceIdsChange={onSelectedSourceIdsChange}
+            onEdit={handleEdit}
+            onSync={handleSync}
+            dialogOpen={open}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={handleClose} autoFocus>{t('close_button')}</Button>

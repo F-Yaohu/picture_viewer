@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 // ImageListItemBar removed; overlay implemented in PictureCard
 import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
@@ -123,7 +124,8 @@ const PictureCard = ({ data, width, height }: { data: Picture, width: number, he
 };
 
 interface ImageGridProps {
-  filterSourceId: number | 'all';
+  dataSources: DataSource[];
+  selectedSourceIds: number[];
   searchTerm: string;
   serverSources: DataSource[];
   onPictureClick: (picture: Picture) => void;
@@ -134,119 +136,243 @@ interface ImageGridProps {
   groupBy?: 'day' | 'week' | 'month'; // 分组粒度，默认 'day'
 }
 
-export default function ImageGrid({ filterSourceId, searchTerm, serverSources, onPictureClick, onPicturesLoaded, rowHeight = 220, gap = 12, groupBy = 'day' }: ImageGridProps) {
+export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, serverSources, onPictureClick, onPicturesLoaded, rowHeight = 220, gap = 12, groupBy = 'day' }: ImageGridProps) {
+  const { t } = useTranslation();
   const [items, setItems] = useState<Picture[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const hasMoreRef = useRef(true);
-  const BATCH_SIZE = 50; // Load 50 items at a time
+  const clientOffsetRef = useRef(0);
+  const serverOffsetsRef = useRef<Record<number, number>>({});
+  const filterVersionRef = useRef(0);
+  const isBatchLoadingRef = useRef(false);
+  const pendingAnimationRef = useRef<number | null>(null);
+  const BATCH_SIZE = 50;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number>(800);
-  const ROW_HEIGHT = rowHeight; // target row height in px (configurable)
-  const GAP = gap; // gap between items (configurable)
+  const ROW_HEIGHT = rowHeight;
+  const GAP = gap;
   const [rows, setRows] = useState<Array<{ label: string; rows: Array<Array<{ item: Picture; width: number; height: number }>> }>>([]);
 
-  const isServerSource = (sourceId: number | 'all') => {
-    if (sourceId === 'all') return false; // 'all' is not a server source itself
-    return serverSources.some(s => s.id === sourceId);
-  };
+  const clientSourceIdSet = useMemo(() => {
+    const set = new Set<number>();
+    dataSources.forEach(source => {
+      if (typeof source.id === 'number') set.add(source.id);
+    });
+    return set;
+  }, [dataSources]);
 
-  const loadMoreItems = useCallback(async (startIndex: number) => {
-    if (!hasMoreRef.current && startIndex > 0) return;
+  const serverSourceIdSet = useMemo(() => {
+    const set = new Set<number>();
+    serverSources.forEach(source => {
+      if (typeof source.id === 'number') set.add(source.id);
+    });
+    return set;
+  }, [serverSources]);
 
-    let newItems: Picture[] = [];
-    let hasMore = true;
+  const selectedClientIds = useMemo(
+    () => selectedSourceIds.filter(id => clientSourceIdSet.has(id)),
+    [selectedSourceIds, clientSourceIdSet],
+  );
 
-    const offset = startIndex;
-    const limit = BATCH_SIZE;
+  const selectedServerIds = useMemo(
+    () => selectedSourceIds.filter(id => serverSourceIdSet.has(id)),
+    [selectedSourceIds, serverSourceIdSet],
+  );
 
-    if (isServerSource(filterSourceId)) {
-      // --- Case 1: Fetching from a specific server source ---
-      const source = serverSources.find(s => s.id === filterSourceId);
-      const response = await fetch(`/api/server-pictures?sourceName=${encodeURIComponent(source!.name)}&offset=${offset}&limit=${limit}&searchTerm=${encodeURIComponent(searchTerm)}`);
-      const data = await response.json();
-      newItems = data.pictures || [];
-      hasMore = data.hasMore;
+  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
 
-    } else {
-      // --- Case 2: Fetching from Dexie (client-side sources or 'all') ---
-      let collection = db.pictures.toCollection();
-      if (filterSourceId !== 'all') {
-        collection = collection.filter(p => p.sourceId === filterSourceId);
+  const sourceConfigMap = useMemo(() => {
+    const map = new Map<number, { disabledFolders: string[] }>();
+    dataSources.forEach(source => {
+      if (typeof source.id === 'number') {
+        map.set(source.id, { disabledFolders: source.disabledFolders ?? [] });
       }
-      if (searchTerm) {
-        collection = collection.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
-      }
-      
-      const clientItems = await collection
-        .sortBy('modified')
-        .then(sorted => sorted.reverse())
-        .then(reversed => reversed.slice(offset, offset + limit));
+    });
+    return map;
+  }, [dataSources]);
 
-      // --- For 'all' view, also fetch from server ---
-      if (filterSourceId === 'all') {
-        // First, get the IDs of all enabled client-side sources
-        const enabledClientSourceIds = await db.dataSources.where('enabled').equals(1).primaryKeys();
-        // Then, fetch only the pictures belonging to those sources
-        let clientCollection = db.pictures.where('sourceId').anyOf(enabledClientSourceIds);
-        if (searchTerm) {
-          clientCollection = clientCollection.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
-        }
-        const clientItems = await clientCollection
-          .sortBy('modified')
-          .then(sorted => sorted.reverse())
-          .then(reversed => reversed.slice(offset, offset + limit));
-
-        const response = await fetch(`/api/server-pictures?offset=${offset}&limit=${limit}&searchTerm=${encodeURIComponent(searchTerm)}`);
-        const serverData = await response.json();
-        const serverItems = serverData.pictures || [];
-        
-        // Combine and re-sort
-        const combined = [...clientItems, ...serverItems];
-        combined.sort((a, b) => b.modified - a.modified);
-        newItems = combined.slice(0, limit); // Ensure we don't exceed the batch size
-
-        // If either has more, we assume there are more items overall
-        hasMore = (clientItems.length === limit) || serverData.hasMore;
-
-      } else {
-        newItems = clientItems;
-        hasMore = newItems.length === limit;
-      }
+  const shouldDisplayPicture = useCallback((picture: Picture) => {
+    if (!picture.sourceId || !selectedSourceIdSet.has(picture.sourceId)) {
+      return false;
     }
 
-    // Deduplicate newItems against themselves first (keep first occurrence)
-    const getKey = (p: Picture) => (typeof p.path === 'string' ? `${p.sourceId}|${p.path}` : `${p.sourceId}|${p.name}`);
+    const config = sourceConfigMap.get(picture.sourceId);
+    if (!config || config.disabledFolders.length === 0) {
+      return true;
+    }
+
+    const relativePath = picture.relativePath;
+    if (!relativePath) {
+      // Older records may not have relativePath; keep them visible until rescanned.
+      return true;
+    }
+
+    const folderPath = (() => {
+      const lastSlash = relativePath.lastIndexOf('/');
+      return lastSlash >= 0 ? relativePath.slice(0, lastSlash) : '';
+    })();
+
+    return !config.disabledFolders.some(folder => (
+      folder.length > 0 && (
+        folder === folderPath ||
+        folderPath.startsWith(`${folder}/`) ||
+        relativePath.startsWith(`${folder}/`)
+      )
+    ));
+  }, [selectedSourceIdSet, sourceConfigMap]);
+
+  useEffect(() => {
+    setItems(currentItems => {
+      const filtered = currentItems.filter(item => shouldDisplayPicture(item));
+      return filtered.length === currentItems.length ? currentItems : filtered;
+    });
+  }, [shouldDisplayPicture]);
+
+  useEffect(() => () => {
+    if (pendingAnimationRef.current !== null) {
+      cancelAnimationFrame(pendingAnimationRef.current);
+      pendingAnimationRef.current = null;
+    }
+  }, []);
+
+  const loadMoreItems = useCallback(async () => {
+    if (isBatchLoadingRef.current) return;
+    if (!hasMoreRef.current) return;
+    isBatchLoadingRef.current = true;
+    const version = filterVersionRef.current;
+    const limit = BATCH_SIZE;
+    const incoming: Picture[] = [];
+    let clientHasMore = false;
+    let serverHasMore = false;
+    let nextClientOffset = clientOffsetRef.current;
+    const nextServerOffsets: Record<number, number> = { ...serverOffsetsRef.current };
+    const trimmedSearch = searchTerm.trim();
+    const searchTermLower = trimmedSearch.toLowerCase();
+
+    try {
+      if (selectedClientIds.length > 0) {
+        let collection = db.pictures.where('sourceId').anyOf(selectedClientIds);
+        if (searchTermLower) {
+          collection = collection.filter(p => p.name.toLowerCase().includes(searchTermLower));
+        }
+        const sorted = await collection.sortBy('modified');
+        sorted.reverse();
+        const slice = sorted.slice(nextClientOffset, nextClientOffset + limit);
+        clientHasMore = sorted.length > nextClientOffset + slice.length;
+        nextClientOffset += slice.length;
+        incoming.push(...slice);
+      }
+
+      if (selectedServerIds.length > 0) {
+        const perServerLimit = Math.max(10, Math.ceil(limit / Math.max(1, selectedServerIds.length)));
+        for (const serverId of selectedServerIds) {
+          const source = serverSources.find(s => s.id === serverId);
+          if (!source) continue;
+          const offset = nextServerOffsets[serverId] || 0;
+          const params = new URLSearchParams({
+            offset: String(offset),
+            limit: String(perServerLimit),
+            sourceName: source.name,
+          });
+          if (trimmedSearch) params.set('searchTerm', trimmedSearch);
+          try {
+            const response = await fetch(`/api/server-pictures?${params.toString()}`);
+            if (!response.ok) throw new Error(`Server responded ${response.status}`);
+            const data = await response.json();
+            const pictures = (data.pictures || []).map((pic: Picture) => ({ ...pic, sourceId: pic.sourceId ?? serverId }));
+            if (pictures.length > 0) {
+              incoming.push(...pictures);
+              nextServerOffsets[serverId] = offset + pictures.length;
+            }
+            if (data.hasMore) serverHasMore = true;
+          } catch (error) {
+            console.error(`Failed to load server pictures for ${source.name}`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load pictures batch', error);
+    }
+
+    if (filterVersionRef.current !== version) {
+      isBatchLoadingRef.current = false;
+      return;
+    }
+
+    clientOffsetRef.current = nextClientOffset;
+    serverOffsetsRef.current = nextServerOffsets;
+
+    if (incoming.length === 0) {
+      hasMoreRef.current = clientHasMore || serverHasMore;
+      isBatchLoadingRef.current = false;
+      if (hasMoreRef.current && pendingAnimationRef.current === null) {
+        pendingAnimationRef.current = window.requestAnimationFrame(() => {
+          pendingAnimationRef.current = null;
+          void loadMoreItems();
+        });
+      }
+      return;
+    }
+
+    incoming.sort((a, b) => b.modified - a.modified);
+
+    const getKey = (p: Picture) => {
+      if (p.relativePath) return `${p.sourceId}|${p.relativePath}`;
+      if (typeof p.path === 'string') return `${p.sourceId}|${p.path}`;
+      return `${p.sourceId}|${p.name}`;
+    };
     const seen = new Set<string>();
-    const dedupedBatch: Picture[] = [];
-    for (const p of newItems) {
+    const allowedBatch: Picture[] = [];
+    for (const p of incoming) {
+      if (!shouldDisplayPicture(p)) {
+        continue;
+      }
       const k = getKey(p);
       if (!seen.has(k)) {
         seen.add(k);
-        dedupedBatch.push(p);
+        allowedBatch.push(p);
       }
     }
 
-    hasMoreRef.current = hasMore;
-
-    if (startIndex === 0) {
-      // Replace items with the deduped incoming batch (no previous items to consider)
-      setItems(dedupedBatch);
-    } else {
-      // Append only items that are not already present in the current state.
-      setItems(currentItems => {
-        const existing = new Set<string>(currentItems.map(it => getKey(it)));
-        const toAdd: Picture[] = [];
-        for (const p of dedupedBatch) {
-          const k = getKey(p);
-          if (!existing.has(k)) {
-            existing.add(k);
-            toAdd.push(p);
-          }
-        }
-        return toAdd.length > 0 ? [...currentItems, ...toAdd] : currentItems;
-      });
+    if (filterVersionRef.current !== version) {
+      isBatchLoadingRef.current = false;
+      return;
     }
-  }, [filterSourceId, searchTerm, serverSources]);
+
+    if (allowedBatch.length === 0) {
+      hasMoreRef.current = clientHasMore || serverHasMore;
+      isBatchLoadingRef.current = false;
+      if (hasMoreRef.current && pendingAnimationRef.current === null) {
+        pendingAnimationRef.current = window.requestAnimationFrame(() => {
+          pendingAnimationRef.current = null;
+          void loadMoreItems();
+        });
+      }
+      return;
+    }
+
+    setItems(currentItems => {
+      if (filterVersionRef.current !== version) {
+        return currentItems;
+      }
+      if (currentItems.length === 0) {
+        return allowedBatch;
+      }
+      const existing = new Set<string>(currentItems.map(it => getKey(it)));
+      const toAdd: Picture[] = [];
+      for (const p of allowedBatch) {
+        const k = getKey(p);
+        if (!existing.has(k)) {
+          existing.add(k);
+          toAdd.push(p);
+        }
+      }
+      return toAdd.length > 0 ? [...currentItems, ...toAdd] : currentItems;
+    });
+
+    hasMoreRef.current = clientHasMore || serverHasMore;
+    isBatchLoadingRef.current = false;
+  }, [BATCH_SIZE, searchTerm, selectedClientIds, selectedServerIds, serverSources, shouldDisplayPicture]);
   
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -344,14 +470,28 @@ export default function ImageGrid({ filterSourceId, searchTerm, serverSources, o
   }, [items, containerWidth]);
 
   useEffect(() => {
-    // Reset everything when the filter or search term changes
+    filterVersionRef.current += 1;
+    if (pendingAnimationRef.current !== null) {
+      cancelAnimationFrame(pendingAnimationRef.current);
+      pendingAnimationRef.current = null;
+    }
+    isBatchLoadingRef.current = false;
+    clientOffsetRef.current = 0;
+    serverOffsetsRef.current = {};
     setItems([]);
+
+    if (selectedClientIds.length === 0 && selectedServerIds.length === 0) {
+      hasMoreRef.current = false;
+      setIsLoading(false);
+      return;
+    }
+
     hasMoreRef.current = true;
     setIsLoading(true);
-    loadMoreItems(0).finally(() => {
+    loadMoreItems().finally(() => {
       setIsLoading(false);
     });
-  }, [filterSourceId, searchTerm, serverSources, loadMoreItems]); // Rerun when filter/search/server data changes
+  }, [selectedClientIds, selectedServerIds, searchTerm, loadMoreItems]);
 
   // IntersectionObserver to trigger loading more when sentinel is visible
   useEffect(() => {
@@ -360,7 +500,7 @@ export default function ImageGrid({ filterSourceId, searchTerm, serverSources, o
     const observer = new IntersectionObserver(entries => {
       entries.forEach(entry => {
         if (entry.isIntersecting && hasMoreRef.current) {
-          loadMoreItems(items.length);
+          loadMoreItems();
         }
       });
     }, { root: null, rootMargin: '400px' });
@@ -374,7 +514,10 @@ export default function ImageGrid({ filterSourceId, searchTerm, serverSources, o
 
 
   if (isLoading) return <Typography>Loading...</Typography>;
-  if (items.length === 0 && !hasMoreRef.current) return <Typography>No pictures found. Add or enable a data source and click Refresh.</Typography>;
+  if (!isLoading && selectedClientIds.length === 0 && selectedServerIds.length === 0) {
+    return <Typography>{t('select_sources_prompt')}</Typography>;
+  }
+  if (!isLoading && items.length === 0 && !hasMoreRef.current) return <Typography>{t('no_pictures_for_selection')}</Typography>;
 
   return (
     <div ref={containerRef}>

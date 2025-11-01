@@ -36,10 +36,13 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
   const seenKeys = new Set<string>();
 
   const directoryHandle = source.path as unknown as FileSystemDirectoryHandle;
-  const fileHandles = await getFileHandles(directoryHandle, source.includeSubfolders ?? false);
+  const disabledFolders = new Set(source.disabledFolders ?? []);
+  const fileEntries = await getFileEntries(directoryHandle, source.includeSubfolders ?? false, disabledFolders);
 
-  for (const [index, fileHandle] of fileHandles.entries()) {
-    const key = `${source.id}|${fileHandle.name}`;
+  for (const [index, entry] of fileEntries.entries()) {
+    const { handle: fileHandle, relativePath } = entry;
+    const relativeKeyPart = relativePath ? `${relativePath}/${fileHandle.name}` : fileHandle.name;
+    const key = `${source.id}|${relativeKeyPart}`;
     seenKeys.add(key);
     const existing = existingMap.get(key);
     const file = await fileHandle.getFile();
@@ -71,6 +74,7 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
         size: file.size,
         width: dimensions.width,
         height: dimensions.height,
+        relativePath: relativeKeyPart,
         // map common EXIF fields if present
         exifMake: exif?.Make || exif?.make || undefined,
         exifModel: exif?.Model || exif?.model || undefined,
@@ -90,7 +94,7 @@ async function scanLocalSource(source: DataSource, existingMap: Map<string, Pict
     }
 
     if (index % 20 === 0) {
-      const progress = (index / fileHandles.length) * 100;
+      const progress = (index / fileEntries.length) * 100;
       self.postMessage({ type: 'progress', progress, statusText: `Scanning ${source.name}...` } as ProgressReport);
     }
   }
@@ -107,7 +111,10 @@ self.onmessage = async (event: MessageEvent<ScanCommand>) => {
 
       for (const pic of existingPictures) {
         if (!pic.sourceId) continue;
-        const key = typeof pic.path === 'string' ? `${pic.sourceId}|${pic.path}` : `${pic.sourceId}|${pic.name}`;
+        const relativeKeyPart = pic.relativePath
+          ? pic.relativePath
+          : (typeof pic.path === 'string' ? pic.path : pic.name);
+        const key = `${pic.sourceId}|${relativeKeyPart}`;
         existingMap.set(key, pic);
 
         if (!existingBySource.has(pic.sourceId)) {
@@ -161,16 +168,35 @@ self.onmessage = async (event: MessageEvent<ScanCommand>) => {
 
 // --- Helper Functions ---
 
-async function getFileHandles(directoryHandle: FileSystemDirectoryHandle, includeSubfolders: boolean): Promise<FileSystemFileHandle[]> {
-  const files: FileSystemFileHandle[] = [];
+interface FileEntryWithPath {
+  handle: FileSystemFileHandle;
+  relativePath: string;
+}
+
+async function getFileEntries(directoryHandle: FileSystemDirectoryHandle, includeSubfolders: boolean, disabledFolders: Set<string>, currentPath = ''): Promise<FileEntryWithPath[]> {
+  const files: FileEntryWithPath[] = [];
   for await (const entry of directoryHandle.values()) {
     if (entry.kind === 'file' && SUPPORTED_EXTENSIONS.some(ext => entry.name.toLowerCase().endsWith(ext))) {
-      files.push(entry as FileSystemFileHandle);
+      files.push({ handle: entry as FileSystemFileHandle, relativePath: currentPath });
     } else if (entry.kind === 'directory' && includeSubfolders) {
-      files.push(...await getFileHandles(entry as FileSystemDirectoryHandle, includeSubfolders));
+      const nextPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+      const isExcluded = isFolderExcluded(nextPath, disabledFolders);
+      if (!isExcluded) {
+        files.push(...await getFileEntries(entry as FileSystemDirectoryHandle, includeSubfolders, disabledFolders, nextPath));
+      }
     }
   }
   return files;
+}
+
+function isFolderExcluded(path: string, disabledFolders: Set<string>): boolean {
+  if (disabledFolders.size === 0) return false;
+  for (const disabled of disabledFolders) {
+    if (path === disabled || path.startsWith(`${disabled}/`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function getImageDimensions(file: File): Promise<{ width: number, height: number }> {

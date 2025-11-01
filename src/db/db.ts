@@ -23,6 +23,7 @@ export interface DataSource {
   path: any; // Can be a string for remote or a FileSystemHandle for local
   enabled: number; // 1 for true, 0 for false
   includeSubfolders?: boolean;
+  disabledFolders?: string[]; // Relative folder paths that should be excluded during scan
   pictureCount?: number; // Optional: to store the count of pictures
   remoteConfig?: RemoteConfig;
 }
@@ -37,6 +38,7 @@ export interface Picture {
   size?: number;
   width?: number;
   height?: number;
+  relativePath?: string; // Relative path (for local files) used to disambiguate files with same name
   // Optional EXIF fields persisted from scan
   exifMake?: string;
   exifModel?: string;
@@ -90,6 +92,9 @@ export class PictureViewerDB extends Dexie {
     this.version(11).stores({
       // Ensure pictures table exists with previous indexes; EXIF fields are stored but not indexed by default
       pictures: '++id, name, sourceId, path, [modified+name], [sourceId+modified]'
+    });
+    this.version(12).stores({
+      // No schema change required, but bump version so future migrations can adjust data when needed
     });
   }
 }
