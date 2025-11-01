@@ -1,19 +1,53 @@
 version: '3.8'
 
 services:
-  picture-viewer:
+  nginx:
+    image: nginx:stable
+    container_name: picture-viewer-nginx
+    ports:
+    # 将宿主机的 3888 端口映射到 nginx 容器的 80 端口
+    # 只需要修改这里的宿主机端口号即可，外网访问时使用这个端口号
+      - "3888:80"
+    volumes:
+      # 将自定义的 nginx 配置文件映射到容器内
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # 将前端构建好的静态文件映射到 nginx 的默认网站根目录
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      # 将宿主机上的图片文件夹映射到 nginx 使用的目录（请替换为真实路径）
+      - /绝对路径/本地你需要展示的文件夹1:/var/www/server_images/文件夹1:ro
+      - /绝对路径/本地你需要展示的文件夹2:/var/www/server_images/文件夹2:ro
+    depends_on:
+      - server
+    networks:
+      - internal_net
+
+  server:
+    build: .
     image: zy1234567/picture-viewer-app:latest
     container_name: picture-viewer-app
-    ports:
-      - "3889:3889"
-    restart: unless-stopped
     environment:
       # 在这里定义服务端数据源，格式是一个 JSON 数组。
       # "name" 是您希望在网页上看到的分类名
       # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-      - 'SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]'
+      - 'SERVER_SOURCES=[{"name": "文件夹1", "path": "/var/www/server_images/文件夹1"}, {"name": "文件夹2", "path": "/var/www/server_images/文件夹2"}]'
     volumes:
-      # 在这里将您宿主机上的文件夹映射到容器内部。
-      # 将左侧的路径替换为您自己的图片文件夹路径
-      # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
-      - '/xxx/你需要展示的文件夹1:/data/test-images:ro'
+      # 将宿主机上的图片文件夹映射到 server 使用的目录（与 nginx 保持一致）
+      - /绝对路径/本地你需要展示的文件夹1:/var/www/server_images/文件夹1:ro
+      - /绝对路径/本地你需要展示的文件夹2:/var/www/server_images/文件夹2:ro
+    expose:
+      - "3889"
+    restart: unless-stopped
+    # 添加健康检查，确保服务可用。
+    healthcheck:
+      # 如果不支持 curl，可以改用 wget 或其他工具
+      test: ["CMD-SHELL", "curl -f http://localhost:3889/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - internal_net
+      
+# 定义一个内部网络，nginx 和 server 通过这个网络通信
+networks:
+  internal_net:
+    driver: bridge

@@ -25,3 +25,4 @@ dist-ssr
 dist.zip
 .env
 .env.example
+server-cache.json

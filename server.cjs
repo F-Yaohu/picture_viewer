@@ -88,6 +88,11 @@ app.get('/api/server-pictures', (req, res) => {
   });
 });
 
+// Health endpoint for container orchestration and healthchecks
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // A robust way to handle image serving that avoids path-to-regexp parsing issues.
 app.use('/api/server-images', (req, res) => {
   // req.path will contain the part of the URL after '/api/server-images/'
@@ -142,10 +147,85 @@ const serverDataCache = {
 };
 const serverSourceConfig = new Map(); // Maps source name to its real path
 
+const CACHE_VERSION = 1;
+const CACHE_FILE_PATH = path.join(__dirname, 'server-cache.json');
+
+async function loadServerCache() {
+  try {
+    const raw = await fs.promises.readFile(CACHE_FILE_PATH, 'utf8');
+    const payload = JSON.parse(raw);
+    if (payload.version !== CACHE_VERSION) {
+      console.log('Cache version mismatch. Ignoring stored cache.');
+      return;
+    }
+    if (Array.isArray(payload.sources) && Array.isArray(payload.pictures)) {
+      serverDataCache.sources = payload.sources;
+      serverDataCache.pictures = payload.pictures;
+    }
+    if (Array.isArray(payload.sourceConfig)) {
+      serverSourceConfig.clear();
+      for (const [name, sourcePath] of payload.sourceConfig) {
+        serverSourceConfig.set(name, sourcePath);
+      }
+    }
+    console.log(`Loaded cached server data: ${serverDataCache.sources.length} sources / ${serverDataCache.pictures.length} pictures.`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.error('Failed to load server cache:', err);
+    }
+  }
+}
+
+async function persistServerCache() {
+  const payload = {
+    version: CACHE_VERSION,
+    sources: serverDataCache.sources,
+    pictures: serverDataCache.pictures,
+    sourceConfig: Array.from(serverSourceConfig.entries()),
+    updatedAt: Date.now(),
+  };
+  const tmpPath = `${CACHE_FILE_PATH}.tmp`;
+  try {
+    await fs.promises.writeFile(tmpPath, JSON.stringify(payload), 'utf8');
+    await fs.promises.rename(tmpPath, CACHE_FILE_PATH);
+  } catch (err) {
+    console.error('Failed to persist server cache:', err);
+    try {
+      await fs.promises.unlink(tmpPath);
+    } catch (_) {
+      // ignore cleanup failure
+    }
+  }
+}
+
 // --- New state variables for scan management ---
 let isScanningServer = false;
 let rescanTimer = null;
 const RESCAN_DEBOUNCE_DELAY = 5000; // 5 seconds
+
+function setupWatchersFromEnv(sourcesEnv) {
+  if (!sourcesEnv) {
+    return;
+  }
+  try {
+    const sources = JSON.parse(sourcesEnv);
+    const pathsToWatch = sources.map(s => s.path).filter(Boolean);
+    if (pathsToWatch.length === 0) {
+      return;
+    }
+    console.log('Watching paths for changes:', pathsToWatch);
+    const watcher = chokidar.watch(pathsToWatch, {
+      ignored: /(^|[\/\\])\../,
+      persistent: true,
+      ignoreInitial: true,
+    });
+    watcher.on('add', filePath => { console.log(`File ${filePath} has been added`); triggerRescan(); });
+    watcher.on('change', filePath => { console.log(`File ${filePath} has been changed`); triggerRescan(); });
+    watcher.on('unlink', filePath => { console.log(`File ${filePath} has been removed`); triggerRescan(); });
+  } catch (e) {
+    console.error('Could not setup file watcher, failed to parse SERVER_SOURCES:', e);
+  }
+}
 
 function triggerRescan() {
   // If a scan is already in progress, do nothing.
@@ -162,15 +242,12 @@ function triggerRescan() {
   console.log(`Scan triggered. Waiting ${RESCAN_DEBOUNCE_DELAY}ms for more changes...`);
   rescanTimer = setTimeout(async () => {
     isScanningServer = true;
-    // Reset the cache before scanning
-    serverDataCache.sources = [];
-    serverDataCache.pictures = [];
-    serverSourceConfig.clear();
-    
-    await scanServerFolders();
-    
-    isScanningServer = false;
-    console.log('Debounced scan finished.');
+    try {
+      await scanServerFolders();
+    } finally {
+      isScanningServer = false;
+      console.log('Debounced scan finished.');
+    }
   }, RESCAN_DEBOUNCE_DELAY);
 }
 
@@ -185,20 +262,24 @@ async function scanServerFolders() {
   try {
     const sources = JSON.parse(sourcesEnv);
     let pictureIdCounter = 0;
+    const nextSources = [];
+    const nextPictures = [];
+    const nextSourceConfig = new Map();
 
     for (const source of sources) {
       if (!source.name || !source.path) continue;
 
       const sourceRootPath = source.path;
-      const sourceId = serverDataCache.sources.length;
+      const sourceId = nextSources.length;
+      let sourcePictureCount = 0;
       const sourceDto = {
         id: sourceId,
         type: 'server',
         name: source.name,
         pictureCount: 0,
       };
-      serverDataCache.sources.push(sourceDto);
-      serverSourceConfig.set(source.name, sourceRootPath);
+      nextSources.push(sourceDto);
+      nextSourceConfig.set(source.name, sourceRootPath);
 
       const files = await getFilesRecursively(sourceRootPath);
       for (const file of files) {
@@ -208,23 +289,34 @@ async function scanServerFolders() {
           const relativePath = path.relative(sourceRootPath, file);
           // A robust way to convert file system path to URL path, works on Windows and Linux.
           const urlSubPath = relativePath.replace(/\\/g, '/');
+          // Encode each path segment to produce safe URLs (spaces, unicode, etc.)
+          const encodedSubPath = urlSubPath.split('/').map(encodeURIComponent).join('/');
 
-          serverDataCache.pictures.push({
+          nextPictures.push({
             id: pictureIdCounter++,
             sourceId: sourceId,
             name: path.basename(file),
-            path: `api/server-images/${encodeURIComponent(source.name)}/${urlSubPath}`,
+            // Expose images via nginx at /server-images/<SourceName>/... for efficient static serving
+            path: `/server-images/${encodeURIComponent(source.name)}/${encodedSubPath}`,
             modified: stats.mtime.getTime(),
             size: stats.size,
             width: metadata.width,
             height: metadata.height,
           });
+          sourcePictureCount += 1;
         } catch (e) {
           console.warn(`Could not process file ${file}: ${e.message}`);
         }
       }
-      sourceDto.pictureCount = serverDataCache.pictures.filter(p => p.sourceId === sourceId).length;
+      sourceDto.pictureCount = sourcePictureCount;
     }
+    serverDataCache.sources = nextSources;
+    serverDataCache.pictures = nextPictures;
+    serverSourceConfig.clear();
+    for (const [name, sourcePath] of nextSourceConfig.entries()) {
+      serverSourceConfig.set(name, sourcePath);
+    }
+    await persistServerCache();
     console.log(`Scan complete. Found ${serverDataCache.sources.length} sources and ${serverDataCache.pictures.length} pictures.`);
   } catch (e) {
     console.error('Failed to parse SERVER_SOURCES or scan folders:', e);
@@ -250,27 +342,15 @@ async function getFilesRecursively(dir) {
 // --- Server Startup ---
 
 async function startServer() {
-  await scanServerFolders();
-  
+  await loadServerCache();
   const sourcesEnv = process.env.SERVER_SOURCES;
-  if (sourcesEnv) {
-    try {
-      const sources = JSON.parse(sourcesEnv);
-      const pathsToWatch = sources.map(s => s.path).filter(Boolean);
-      if (pathsToWatch.length > 0) {
-        console.log('Watching paths for changes:', pathsToWatch);
-        const watcher = chokidar.watch(pathsToWatch, {
-          ignored: /(^|[\/\\])\../, // ignore dotfiles
-          persistent: true,
-          ignoreInitial: true, // Don't trigger on initial add
-        });
-        watcher.on('add', path => { console.log(`File ${path} has been added`); triggerRescan(); });
-        watcher.on('change', path => { console.log(`File ${path} has been changed`); triggerRescan(); });
-        watcher.on('unlink', path => { console.log(`File ${path} has been removed`); triggerRescan(); });
-      }
-    } catch (e) {
-      console.error('Could not setup file watcher, failed to parse SERVER_SOURCES:', e);
-    }
+  setupWatchersFromEnv(sourcesEnv);
+
+  if (serverDataCache.sources.length === 0 || serverDataCache.pictures.length === 0) {
+    await scanServerFolders();
+  } else {
+    console.log('Usingpersisted  server cache. Triggering background validation scan.');
+    triggerRescan();
   }
 
   app.listen(3889, () => console.log('Server running on http://localhost:3889'));
