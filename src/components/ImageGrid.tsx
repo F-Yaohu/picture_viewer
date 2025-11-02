@@ -192,11 +192,12 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
   }, [dataSources]);
 
   const shouldDisplayPicture = useCallback((picture: Picture) => {
-    if (!picture.sourceId || !selectedSourceIdSet.has(picture.sourceId)) {
+    const sourceId = picture.sourceId;
+    if (sourceId === null || sourceId === undefined || !selectedSourceIdSet.has(sourceId)) {
       return false;
     }
 
-    const config = sourceConfigMap.get(picture.sourceId);
+    const config = sourceConfigMap.get(sourceId);
     if (!config || config.disabledFolders.length === 0) {
       return true;
     }
