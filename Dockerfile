@@ -13,12 +13,16 @@ WORKDIR /app
 # 从构建器阶段仅拷贝必要的生产依赖
 COPY --from=builder /app/node_modules ./node_modules
 # 从构建器阶段拷贝构建好的前端静态资源
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/dist ./dist_temp
 # 拷贝生产环境需要的服务端脚本和包文件
 COPY server.cjs ./
 COPY package*.json ./
 # 拷贝自定义的 nginx 配置文件
-COPY /nginx ./nginx
+COPY /nginx ./nginx_temp
+
+# 拷贝覆盖配置文件脚本
+COPY entrypoint.sh /app/bin/entrypoint.sh
+RUN chmod +x /app/bin/entrypoint.sh
 
 # 清理掉开发依赖，进一步减小镜像体积
 RUN npm prune --production
@@ -27,4 +31,4 @@ RUN npm prune --production
 EXPOSE 3889
 
 # 启动应用的命令
-CMD ["node", "server.cjs"]
+ENTRYPOINT ["/app/bin/entrypoint.sh"]
