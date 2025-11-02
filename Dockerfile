@@ -17,6 +17,8 @@ COPY --from=builder /app/dist ./dist
 # 拷贝生产环境需要的服务端脚本和包文件
 COPY server.cjs ./
 COPY package*.json ./
+# 拷贝自定义的 nginx 配置文件
+COPY /nginx ./nginx
 
 # 清理掉开发依赖，进一步减小镜像体积
 RUN npm prune --production
