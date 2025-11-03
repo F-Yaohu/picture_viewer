@@ -434,9 +434,14 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
             ) : (
               <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)', display: 'block', mt: 1 }}>EXIF: 不可用</Typography>
             )}
-            {typeof picture.path === 'string' && (
-              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', mt: 0.5, wordBreak: 'break-all' }}>{picture.path}</Typography>
-            )}
+            {typeof picture.path === 'string' && (() => {
+              // If the path is a server-local path like '/server-images/..', show a full absolute URL
+              const raw = picture.path as string;
+              const display = (typeof window !== 'undefined' && raw && raw.startsWith('/')) ? `${window.location.origin}${raw}` : raw;
+              return (
+                <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', mt: 0.5, wordBreak: 'break-all' }}>{display}</Typography>
+              );
+            })()}
           </Paper>
         )}
       </Box>
