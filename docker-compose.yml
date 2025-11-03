@@ -12,9 +12,13 @@ services:
       # 使用自定义的 nginx 配置和前端构建输出，可以不管理这两行
       - nginx_conf:/etc/nginx:ro
       - frontend_dist:/usr/share/nginx/html:ro
-      # 如果有需要，可以通过映射宿主机上的图片文件夹映射到容器的 /server_images 下（请替换为真实绝对路径）
-      - /绝对路径/本地你需要展示的文件夹1:/server_images/文件夹1:ro
-      - /绝对路径/本地你需要展示的文件夹2:/server_images/文件夹2:ro
+      
+      # 和下面 app server 保持一致
+      # 将宿主机上希望展示的图片目录分别挂载到容器的 /server_images/<name> 目录下。
+      # 例如：
+      # - /abs/path/to/your/folder1:/server_images/folder1:ro
+      # - /abs/path/to/your/folder2:/server_images/folder2:ro
+      # 应用会自动把 /server_images 下的每个子目录视为一个 server 数据源，源名使用子目录名。
     depends_on:
       - server
     networks:
@@ -24,18 +28,17 @@ services:
     build: .
     image: zy1234567/picture-viewer-app:latest
     container_name: picture-viewer-app
-    environment:
-      # 在这里定义服务端数据源，格式是一个 JSON 数组。
-      # "name" 是您希望在网页上看到的分类名
-      # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-      - 'SERVER_SOURCES=[{"name": "文件夹1", "path": "/server_images/文件夹1"}, {"name": "文件夹2", "path": "/server_images/文件夹2"}]'
     volumes:
       # 自定义的 nginx 配置文件和前端构建好的静态文件，可以不管理这两行
       - nginx_conf:/app/nginx:rw
       - frontend_dist:/app/dist:rw
-      # 如果有需要，可以通过映射宿主机上的图片文件夹映射到 server 使用的目录（与 nginx 保持一致）
-      - /绝对路径/本地你需要展示的文件夹1:/server_images/文件夹1:ro
-      - /绝对路径/本地你需要展示的文件夹2:/server_images/文件夹2:ro
+
+      # 和上面 nginx 保持一致
+      # 将宿主机上希望展示的图片目录分别挂载到容器的 /server_images/<name> 目录下。
+      # 例如：
+      # - /abs/path/to/your/folder1:/server_images/folder1:ro
+      # - /abs/path/to/your/folder2:/server_images/folder2:ro
+      # 应用会自动把 /server_images 下的每个子目录视为一个 server 数据源，源名使用子目录名。
     expose:
       - "3889"
     restart: unless-stopped

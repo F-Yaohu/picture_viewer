@@ -204,27 +204,46 @@ let rescanTimer = null;
 const RESCAN_DEBOUNCE_DELAY = 5000; // 5 seconds
 
 function setupWatchersFromEnv(sourcesEnv) {
-  if (!sourcesEnv) {
-    return;
-  }
-  try {
-    const sources = JSON.parse(sourcesEnv);
-    const pathsToWatch = sources.map(s => s.path).filter(Boolean);
-    if (pathsToWatch.length === 0) {
-      return;
+  (async () => {
+    try {
+      let sources = null;
+      if (sourcesEnv) {
+        try {
+          sources = JSON.parse(sourcesEnv);
+        } catch (e) {
+          console.error('Failed to parse SERVER_SOURCES JSON for watcher, falling back to auto-discovery:', e);
+          sources = null;
+        }
+      }
+
+      if (!sources) {
+        const mountRoot = '/server_images';
+        try {
+          const entries = await fs.promises.readdir(mountRoot, { withFileTypes: true });
+          sources = entries.filter(en => en.isDirectory()).map(en => ({ name: en.name, path: path.join(mountRoot, en.name) }));
+        } catch (err) {
+          console.warn('No mounted server image folders found under', mountRoot);
+          sources = [];
+        }
+      }
+
+      const pathsToWatch = sources.map(s => s.path).filter(Boolean);
+      if (pathsToWatch.length === 0) {
+        return;
+      }
+      console.log('Watching paths for changes:', pathsToWatch);
+      const watcher = chokidar.watch(pathsToWatch, {
+        ignored: /(^|[\/\\])\../,
+        persistent: true,
+        ignoreInitial: true,
+      });
+      watcher.on('add', filePath => { console.log(`File ${filePath} has been added`); triggerRescan(); });
+      watcher.on('change', filePath => { console.log(`File ${filePath} has been changed`); triggerRescan(); });
+      watcher.on('unlink', filePath => { console.log(`File ${filePath} has been removed`); triggerRescan(); });
+    } catch (e) {
+      console.error('Could not setup file watcher for server images:', e);
     }
-    console.log('Watching paths for changes:', pathsToWatch);
-    const watcher = chokidar.watch(pathsToWatch, {
-      ignored: /(^|[\/\\])\../,
-      persistent: true,
-      ignoreInitial: true,
-    });
-    watcher.on('add', filePath => { console.log(`File ${filePath} has been added`); triggerRescan(); });
-    watcher.on('change', filePath => { console.log(`File ${filePath} has been changed`); triggerRescan(); });
-    watcher.on('unlink', filePath => { console.log(`File ${filePath} has been removed`); triggerRescan(); });
-  } catch (e) {
-    console.error('Could not setup file watcher, failed to parse SERVER_SOURCES:', e);
-  }
+  })();
 }
 
 function triggerRescan() {
@@ -254,13 +273,35 @@ function triggerRescan() {
 async function scanServerFolders() {
   console.log('Starting server-side folder scan...');
   const sourcesEnv = process.env.SERVER_SOURCES;
-  if (!sourcesEnv) {
-    console.log('SERVER_SOURCES environment variable not set. Skipping scan.');
-    return;
+  let sources = null;
+  if (sourcesEnv) {
+    try {
+      sources = JSON.parse(sourcesEnv);
+    } catch (e) {
+      console.error('Failed to parse SERVER_SOURCES JSON, falling back to auto-discovery:', e);
+      sources = null;
+    }
+  }
+
+  // If SERVER_SOURCES not provided, auto-discover subfolders under /server_images
+  if (!sources) {
+    try {
+      const mountRoot = '/server_images';
+      const entries = await fs.promises.readdir(mountRoot, { withFileTypes: true });
+      const discovered = entries.filter(en => en.isDirectory()).map(en => ({ name: en.name, path: path.join(mountRoot, en.name) }));
+      if (discovered.length === 0) {
+        console.log(`No subfolders found under ${mountRoot}. If you intended to provide SERVER_SOURCES via environment, set it in docker-compose.`);
+        return;
+      }
+      sources = discovered;
+      console.log('Auto-discovered server sources from container mount:', sources.map(s => s.name));
+    } catch (err) {
+      console.error('Failed to auto-discover server sources under /server_images:', err);
+      return;
+    }
   }
 
   try {
-    const sources = JSON.parse(sourcesEnv);
     let pictureIdCounter = 0;
     const nextSources = [];
     const nextPictures = [];
@@ -269,7 +310,7 @@ async function scanServerFolders() {
     for (const source of sources) {
       if (!source.name || !source.path) continue;
 
-      const sourceRootPath = source.path;
+  const sourceRootPath = source.path;
       const sourceId = nextSources.length;
       let sourcePictureCount = 0;
       const sourceDto = {
