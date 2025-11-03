@@ -39,45 +39,31 @@
 
 1.  在您希望部署本项目的目录下，创建一个名为 `docker-compose.yml` 的文件。
 
-2.  将以下内容**完整复制**并粘贴到 `docker-compose.yml` 文件中：
+2. 使用仓库中提供的 `docker-compose.yml`（推荐）
 
-    ```yaml
-    version: '3.8'
+   仓库已包含一个示例 `docker-compose.yml`，它通过 nginx 将前端静态资源对外暴露（宿主机端口 3888），并将 Node 后端 3889 置于内部网络由 nginx 代理。
 
-    services:
-      picture-viewer:
-        image: zy1234567/picture-viewer-app:latest
-        container_name: picture-viewer-app
-        ports:
-          - "3889:3889"
-        restart: unless-stopped
-        environment:
-          # 在这里定义服务端数据源，格式是一个 JSON 数组。
-          # "name" 是您希望在网页上看到的分类名
-          # "path" 必须与您在 volumes 中设置的容器内路径完全一致
-          - 'SERVER_SOURCES=[{"name": "测试图片", "path": "/data/test-images"}]'
-        volumes:
-          # 在这里将您宿主机上的文件夹映射到容器内部。
-          # 将左侧的路径替换为您自己的图片文件夹路径
-          # 将右侧的路径作为容器内的别名（建议保持 /data/... 的格式）
-          - '/xxx/你需要展示的文件夹1:/data/test-images:ro'
-    ```
+   操作步骤：
 
-3.  **修改 `docker-compose.yml` 文件中的 `volumes` 部分**，将 ` /xxx/你需要展示的文件夹1` 替换为您自己电脑上存放图片的**绝对路径**。例如：
-    -   Windows: `C:/Users/YourUser/Pictures/MyPhotos:/data/test-images:ro`
-    -   Linux/Mac: `/home/youruser/pictures/myphotos:/data/test-images:ro`
+   1. 打开仓库根目录下的 `docker-compose.yml`。
+   2. 在 `nginx` 和 `server` 服务的 `volumes` 部分，将宿主机上希望展示的每个图片目录分别挂载到容器的 `/server_images/<name>` 下。例如：
 
-    您可以添加多行 `-` 来映射多个文件夹，并相应地更新 `SERVER_SOURCES` 环境变量。
+      - Windows 示例：
+        - 'C:/Users/You/Pictures/Album1:/server_images/Album1:ro'
+      - Linux/Mac 示例：
+        - '/home/you/photos/family:/server_images/family:ro'
 
-4.  保存文件后，在该目录下打开终端，运行以下命令启动服务：
+      应用会自动把 `/server_images` 下的每个子目录视为一个 server 数据源（源名使用子目录名），无需再在环境变量中额外配置 `SERVER_SOURCES`。
 
-    ```bash
-    docker-compose up -d
-    ```
+   3. 保存 `docker-compose.yml` 后，在该目录下运行：
+
+      ```bash
+      docker-compose up -d
+      ```
 
 ### 3. 访问应用
 
-现在，您可以在浏览器中打开 `http://localhost:3889` 来访问您的图片查看器应用。
+现在，您可以在浏览器中打开 `http://localhost:3888`（nginx）来访问您的图片查看器应用。
 
 ### 4. 停止服务
 
@@ -111,7 +97,7 @@ npm run build
 npm start
 ```
 
-默认监听 [http://localhost:3889](http://localhost:3889)
+默认对外使用 nginx 暴露在 [http://localhost:3888](http://localhost:3888)（nginx 代理到内部 Node 服务）。
 
 
 ## 目录结构
@@ -150,7 +136,7 @@ picture_viewer/
 
 - 本地文件夹功能依赖于 [File System Access API](https://developer.mozilla.org/zh-CN/docs/Web/API/File_System_Access_API)，仅支持 Chromium 内核浏览器（如 Chrome、Edge）。
 - 远程 API 需支持跨域或通过内置 `/api/proxy` 代理转发。
-- Docker 镜像默认暴露 3889 端口。
+-- 推荐通过仓库中的 `docker-compose.yml` 使用 nginx 前端代理并把外部端口映射到 3888（nginx），内部 Node 服务监听 3889，由 nginx 代理转发。
 
 ## 许可证
 

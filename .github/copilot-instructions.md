@@ -32,7 +32,7 @@
 - 远程数据源：`RemoteSourceDialog.tsx` 处理 API 配置和字段映射，注意请求/响应的分页与 CORS（也可走内置 `/api/proxy`）。
 
 ### 部署与 Docker 相关要点
-- 镜像/容器：README 中给出 `docker-compose.yml` 示例。容器通过环境变量 `SERVER_SOURCES` 传入服务器端的数据源映射，路径需与容器内 `volumes` 映射一致。
+- 镜像/容器：README 中给出 `docker-compose.yml` 示例。服务器容器会自动识别挂载到容器内 `/server_images/` 目录下的每个子文件夹并将其视为一个 server 数据源（源名使用子文件夹名），因此通常无需通过 `SERVER_SOURCES` 环境变量手动配置数据源映射。
 - 服务器端依赖 `sharp`（用于图像处理），任何对图像的后端处理改动通常需要在 `server.cjs` 或新增的后端模块中修改并重建镜像。
 
 ### 修改/新增功能的小贴士（示例）
