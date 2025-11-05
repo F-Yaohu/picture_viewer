@@ -6,6 +6,27 @@ import Box from '@mui/material/Box';
 import { db, type Picture, type DataSource } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
 
+// Thumbnail size presets (must match server.cjs THUMBNAIL_SIZES)
+const THUMBNAIL_SIZES = { SMALL: 400, MEDIUM: 800, LARGE: 1600 } as const;
+
+/**
+ * Select optimal thumbnail size based on container width and device pixel ratio.
+ * Returns one of the standard sizes (400, 800, 1600) to maximize cache hit rate.
+ * 
+ * @param containerWidth - Current grid container width in CSS pixels
+ * @param dpr - Device pixel ratio (window.devicePixelRatio)
+ * @returns One of: 400, 800, or 1600
+ */
+function selectThumbnailSize(containerWidth: number, dpr: number = 1): number {
+  // Calculate required physical pixels for optimal quality
+  const requiredWidth = Math.round(containerWidth * Math.max(1, dpr));
+  
+  // Select smallest preset that meets or exceeds required width
+  if (requiredWidth <= THUMBNAIL_SIZES.SMALL) return THUMBNAIL_SIZES.SMALL;
+  if (requiredWidth <= THUMBNAIL_SIZES.MEDIUM) return THUMBNAIL_SIZES.MEDIUM;
+  return THUMBNAIL_SIZES.LARGE;
+}
+
 // Minimal ResizeObserver hook to avoid adding an extra dependency.
 function useResizeObserver(ref: any, callback: (entry: ResizeObserverEntry) => void) {
   useEffect(() => {
@@ -304,10 +325,13 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
           const source = serverSources.find(s => s.id === serverId);
           if (!source) continue;
           const offset = nextServerOffsets[serverId] || 0;
+          // Select quantized thumbnail size (400, 800, or 1600) based on layout
+          const thumbWidth = selectThumbnailSize(containerWidth, window.devicePixelRatio);
           const params = new URLSearchParams({
             offset: String(offset),
             limit: String(perServerLimit),
             sourceName: source.name,
+            thumbWidth: String(thumbWidth),
           });
           if (trimmedSearch) params.set('searchTerm', trimmedSearch);
           try {

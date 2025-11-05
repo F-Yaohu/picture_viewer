@@ -20,6 +20,16 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_CACHE_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB
 const CACHE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
+// Thumbnail size presets (3-tier strategy to optimize cache hit rate)
+// Each image will have at most 3 cached versions instead of unlimited variations
+const THUMBNAIL_SIZES = {
+  SMALL: 400,    // For mobile/small screens
+  MEDIUM: 800,   // For standard screens (1080p)
+  LARGE: 1600,   // For high-DPI screens (2K/4K)
+};
+const THUMBNAIL_SIZES_ARRAY = Object.values(THUMBNAIL_SIZES).sort((a, b) => a - b);
+const THUMBNAIL_MAX_WIDTH = Math.max(...THUMBNAIL_SIZES_ARRAY);
+
 // Cache metadata: track creation/modification time, file size, access count
 let cacheMetadata = {
   version: CACHE_VERSION,
@@ -280,16 +290,20 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Thumbnail generation endpoint: /api/server-images-thumb/<sourceName>/<imagePath>?width=200
-// 使用 middleware 而不是直接的 app.get 来避免 Express 5 的通配符解析问题
+// Thumbnail generation endpoint: /api/server-images-thumb/<sourceName>/<imagePath>?width=800
+// Uses 3-tier size strategy to maximize cache hit rate
+// Request width is quantized to nearest preset size (400, 800, or 1600)
 app.use('/api/server-images-thumb/', async (req, res, next) => {
   if (req.method !== 'GET') return next();
   
   try {
-    const width = Math.min(parseInt(req.query.width || 200), 400); // Cap width at 400px
-    if (isNaN(width) || width < 50) {
+    const requestedWidth = parseInt(req.query.width || 800);
+    if (isNaN(requestedWidth) || requestedWidth < 50) {
       return res.status(400).json({ error: 'Invalid width parameter' });
     }
+
+    // Quantize to nearest preset size tier (find smallest preset >= requested width)
+    const width = THUMBNAIL_SIZES_ARRAY.find(size => size >= requestedWidth) || THUMBNAIL_MAX_WIDTH;
 
     // 获取去掉 /api/server-images-thumb/ 前缀后的路径
     const pathParts = req.path.split('/').filter(p => p);
@@ -417,6 +431,11 @@ app.use((req, res) => {
 });
 
 // --- Server-Side Data Source Logic ---
+
+// ID offset to avoid collision with local/remote sources
+// Local sources use ID 1-9999 (from Dexie ++id)
+// Server sources use ID 10000+ to maintain uniqueness
+const SERVER_SOURCE_ID_OFFSET = 10000;
 
 const serverDataCache = {
   sources: [],
@@ -602,7 +621,7 @@ async function scanServerFolders() {
       if (!source.name || !source.path) continue;
 
   const sourceRootPath = source.path;
-      const sourceId = nextSources.length;
+      const sourceId = SERVER_SOURCE_ID_OFFSET + nextSources.length;
       let sourcePictureCount = 0;
       const sourceDto = {
         id: sourceId,
