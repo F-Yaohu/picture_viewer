@@ -33,6 +33,8 @@ interface FullscreenViewerProps {
 export default function FullscreenViewer({ open, onClose, picture, onNavigate }: FullscreenViewerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [isLoadingOriginal, setIsLoadingOriginal] = useState(false);
 
   // States for zoom and pan
   const [scale, setScale] = useState(1);
@@ -117,6 +119,74 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
     }
   }, [open, imageContainerRef.current]); // Depend on 'open' and the ref's current value
   // --- End of Wheel Handler ---
+
+  // Manage body & html overflow to hide scrollbars when fullscreen viewer is open
+  // Also prevent arrow key navigation from scrolling the page
+  useEffect(() => {
+    if (open) {
+      const htmlElement = document.documentElement;
+      const bodyElement = document.body;
+      
+      // Save original values
+      const originalHtmlOverflow = htmlElement.style.overflow;
+      const originalBodyOverflow = bodyElement.style.overflow;
+      const originalHtmlOverflowY = htmlElement.style.overflowY;
+      const originalBodyOverflowY = bodyElement.style.overflowY;
+      
+      // Use overflow-y: scroll to keep scrollbar space but hide the scrollbar with CSS
+      // This prevents layout shift when toggling fullscreen
+      htmlElement.style.overflowY = 'scroll';
+      bodyElement.style.overflowY = 'scroll';
+      
+      // Add CSS to hide the scrollbar while keeping its space
+      const style = document.createElement('style');
+      style.id = 'fullscreen-viewer-scrollbar-hide';
+      style.textContent = `
+        html::-webkit-scrollbar,
+        body::-webkit-scrollbar {
+          width: 15px;
+          background: transparent;
+        }
+        html::-webkit-scrollbar-track,
+        body::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        html::-webkit-scrollbar-thumb,
+        body::-webkit-scrollbar-thumb {
+          background: transparent;
+        }
+        /* Firefox */
+        html {
+          scrollbar-color: transparent;
+          scrollbar-width: auto;
+        }
+      `;
+      document.head.appendChild(style);
+      
+      // Prevent arrow key scrolling
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+          e.preventDefault();
+        }
+      };
+      
+      window.addEventListener('keydown', handleKeyDown);
+      
+      return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+        // Remove the style
+        const styleElement = document.getElementById('fullscreen-viewer-scrollbar-hide');
+        if (styleElement) {
+          styleElement.remove();
+        }
+        // Restore original values
+        htmlElement.style.overflow = originalHtmlOverflow;
+        bodyElement.style.overflow = originalBodyOverflow;
+        htmlElement.style.overflowY = originalHtmlOverflowY;
+        bodyElement.style.overflowY = originalBodyOverflowY;
+      };
+    }
+  }, [open]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0 || scale === 1) return; // Only main mouse button, and only allow drag when zoomed
@@ -249,18 +319,47 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
       // Reset zoom/pan state when picture changes
       handleReset(); 
       setImageUrl(null);
+      setThumbnailFailed(false);
+      setIsLoadingOriginal(true);
 
       if (typeof picture.path === 'string') {
-        // It's a remote URL
-        if (isMounted) setImageUrl(picture.path);
+        // It's a remote URL - use it directly without creating Blob
+        const anyPic = picture as any;
+        
+        // Show thumbnail first if available
+        if (anyPic.thumbUrl) {
+          if (isMounted) {
+            setImageUrl(anyPic.thumbUrl);
+          }
+        }
+
+        // For remote URLs, we can use the original path directly
+        // This avoids Blob URL creation and caching issues
+        if (isMounted) {
+          // Delay setting the original to simulate loading
+          setTimeout(() => {
+            if (isMounted) {
+              setImageUrl(anyPic.path);
+              setIsLoadingOriginal(false);
+            }
+          }, 50);
+        }
       } else {
         // It's a local FileSystemFileHandle
         try {
           const fileHandle = picture.path as unknown as FileSystemFileHandle;
           const file = await fileHandle.getFile();
           objectUrl = URL.createObjectURL(file);
-          if (isMounted) setImageUrl(objectUrl);
-        } catch (error) { console.error('Failed to create object URL for viewer:', error); }
+          if (isMounted) {
+            setImageUrl(objectUrl);
+            setIsLoadingOriginal(false);
+          }
+        } catch (error) { 
+          console.error('Failed to create object URL for viewer:', error);
+          if (isMounted) {
+            setIsLoadingOriginal(false);
+          }
+        }
       }
     };
 
@@ -339,6 +438,13 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
               src={imageUrl}
               alt={picture?.name}
               onDoubleClick={handleDoubleClick}
+              onError={() => {
+                // Fallback to original URL if thumbnail fails
+                if (!thumbnailFailed && typeof picture?.path === 'string') {
+                  setThumbnailFailed(true);
+                  setImageUrl(picture.path);
+                }
+              }}
               style={{
                 position: 'absolute',
                 top: '50%',
@@ -350,7 +456,8 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
                 width: 'auto',
                 height: 'auto',
                 display: 'block',
-                transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                transition: isDragging ? 'none' : 'transform 0.1s ease-out, opacity 0.3s ease-out',
+                opacity: isLoadingOriginal ? 0.7 : 1,
                 willChange: 'transform',
                 cursor: 'inherit'
               }}

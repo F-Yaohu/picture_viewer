@@ -4,13 +4,178 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 const chokidar = require('chokidar');
-require('dotenv').config();
 
-
+// 仅加载 .env 文件，避免从系统环境继承可能有问题的变量
+require('dotenv').config({ override: false });
 
 const app = express();
 
 app.use(express.json());
+
+// --- Thumbnail Cache Management ---
+const THUMB_CACHE_DIR = path.join(__dirname, 'thumb_cache');
+const CACHE_METADATA_FILE = path.join(THUMB_CACHE_DIR, '.cache_metadata.json');
+const CACHE_VERSION = '1.0';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_CACHE_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB
+const CACHE_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+// Cache metadata: track creation/modification time, file size, access count
+let cacheMetadata = {
+  version: CACHE_VERSION,
+  createdAt: Date.now(),
+  entries: {} // Map: filename -> { createdAt, modifiedAt, size, accessCount }
+};
+
+async function ensureCacheDir() {
+  try {
+    await fs.promises.mkdir(THUMB_CACHE_DIR, { recursive: true });
+  } catch (err) {
+    console.error('Failed to create thumb_cache directory:', err);
+  }
+}
+
+async function loadCacheMetadata() {
+  try {
+    const raw = await fs.promises.readFile(CACHE_METADATA_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed.version === CACHE_VERSION) {
+      cacheMetadata = parsed;
+      console.log(`Loaded cache metadata: ${Object.keys(cacheMetadata.entries).length} entries`);
+    } else {
+      console.log('Cache metadata version mismatch. Starting fresh.');
+      cacheMetadata = { version: CACHE_VERSION, createdAt: Date.now(), entries: {} };
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn('Failed to load cache metadata:', err.message);
+    }
+    cacheMetadata = { version: CACHE_VERSION, createdAt: Date.now(), entries: {} };
+  }
+}
+
+async function saveCacheMetadata() {
+  try {
+    await fs.promises.writeFile(CACHE_METADATA_FILE, JSON.stringify(cacheMetadata, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save cache metadata:', err);
+  }
+}
+
+function recordCacheEntry(filename, size) {
+  const now = Date.now();
+  cacheMetadata.entries[filename] = {
+    createdAt: now,
+    modifiedAt: now,
+    size: size,
+    accessCount: 1
+  };
+}
+
+function updateCacheEntryAccess(filename) {
+  if (cacheMetadata.entries[filename]) {
+    cacheMetadata.entries[filename].accessCount += 1;
+    cacheMetadata.entries[filename].modifiedAt = Date.now();
+  }
+}
+
+async function getThumbCacheKey(sourceName, imagePath, width) {
+  const crypto = require('crypto');
+  const key = `${sourceName}/${imagePath}/${width}`;
+  const hash = crypto.createHash('md5').update(key).digest('hex');
+  return `${hash}.webp`;
+}
+
+/**
+ * LRU-based cache cleanup: remove oldest or least-accessed entries if cache exceeds size limit
+ */
+async function cleanupCacheIfNeeded() {
+  try {
+    const entries = await fs.promises.readdir(THUMB_CACHE_DIR);
+    let totalSize = 0;
+    const fileStats = {};
+
+    for (const filename of entries) {
+      if (filename === '.cache_metadata.json') continue;
+      const filepath = path.join(THUMB_CACHE_DIR, filename);
+      try {
+        const stat = await fs.promises.stat(filepath);
+        fileStats[filename] = stat.size;
+        totalSize += stat.size;
+      } catch (err) {
+        // File might have been deleted, skip
+      }
+    }
+
+    if (totalSize > MAX_CACHE_SIZE_BYTES) {
+      console.log(`Cache size (${Math.round(totalSize / 1024 / 1024)}MB) exceeds limit. Cleaning up...`);
+      
+      // Sort by access time (oldest first) and access count (least accessed first)
+      const sortedEntries = Object.entries(cacheMetadata.entries)
+        .filter(([filename]) => fileStats[filename])
+        .sort((a, b) => {
+          // Primary: least accessed
+          if (a[1].accessCount !== b[1].accessCount) {
+            return a[1].accessCount - b[1].accessCount;
+          }
+          // Secondary: oldest
+          return a[1].modifiedAt - b[1].modifiedAt;
+        });
+
+      let freedSize = 0;
+      const targetSize = MAX_CACHE_SIZE_BYTES * 0.8; // Target 80% of max size
+      
+      for (const [filename] of sortedEntries) {
+        if (freedSize >= totalSize - targetSize) break;
+        
+        const filepath = path.join(THUMB_CACHE_DIR, filename);
+        try {
+          const size = fileStats[filename];
+          await fs.promises.unlink(filepath);
+          freedSize += size;
+          delete cacheMetadata.entries[filename];
+          console.log(`  Removed cache entry: ${filename} (freed ${Math.round(size / 1024)}KB)`);
+        } catch (err) {
+          console.warn(`  Failed to remove cache entry ${filename}:`, err.message);
+        }
+      }
+      
+      console.log(`Cleanup complete. Freed ${Math.round(freedSize / 1024 / 1024)}MB.`);
+      await saveCacheMetadata();
+    }
+
+    // Also cleanup expired entries (older than TTL and not accessed recently)
+    const now = Date.now();
+    const expiredEntries = Object.entries(cacheMetadata.entries)
+      .filter(([, metadata]) => now - metadata.modifiedAt > CACHE_TTL_MS);
+
+    if (expiredEntries.length > 0) {
+      console.log(`Removing ${expiredEntries.length} expired cache entries (not accessed in 7 days)...`);
+      for (const [filename] of expiredEntries) {
+        const filepath = path.join(THUMB_CACHE_DIR, filename);
+        try {
+          await fs.promises.unlink(filepath);
+          delete cacheMetadata.entries[filename];
+        } catch (err) {
+          console.warn(`Failed to remove expired entry ${filename}:`, err.message);
+        }
+      }
+      await saveCacheMetadata();
+    }
+  } catch (err) {
+    console.error('Cache cleanup error:', err);
+  }
+}
+
+/**
+ * Periodic cache maintenance: runs every 6 hours
+ */
+function startCacheMaintenanceTimer() {
+  setInterval(async () => {
+    console.log('Running scheduled cache maintenance...');
+    await cleanupCacheIfNeeded();
+  }, CACHE_CLEANUP_INTERVAL_MS);
+}
 
 // 静态资源托管（dist为React打包目录）
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -52,7 +217,7 @@ app.get('/api/server-data', (req, res) => {
 });
 
 app.get('/api/server-pictures', (req, res) => {
-  const { sourceName, offset = 0, limit = 50, searchTerm = '' } = req.query;
+  const { sourceName, offset = 0, limit = 50, searchTerm = '', thumbWidth = 200 } = req.query;
 
   let picturesToFilter = [];
 
@@ -82,8 +247,30 @@ app.get('/api/server-pictures', (req, res) => {
   const paginatedPictures = picturesToFilter.slice(numOffset, numOffset + numLimit);
   const hasMore = (numOffset + paginatedPictures.length) < picturesToFilter.length;
 
+  // Enrich pictures with thumbnail URL
+  const thumbSize = parseInt(thumbWidth, 10) || 200;
+  const enrichedPictures = paginatedPictures.map(pic => {
+    // Extract source name from the original path construction logic
+    const source = serverDataCache.sources.find(s => s.id === pic.sourceId);
+    const srcName = source ? source.name : '';
+    
+    // Build thumbnail URL: /api/server-images-thumb/<sourceName>/<imagePath>?width=<size>
+    // The imagePath part of pic.path is the encoded subpath after the source name
+    const pathMatch = pic.path.match(/^\/server-images\/([^/]+)\/(.+)$/);
+    let thumbUrl = null;
+    if (pathMatch && srcName) {
+      const encodedSubPath = pathMatch[2];
+      thumbUrl = `/api/server-images-thumb/${encodeURIComponent(srcName)}/${encodedSubPath}?width=${thumbSize}`;
+    }
+
+    return {
+      ...pic,
+      thumbUrl,
+    };
+  });
+
   res.json({
-    pictures: paginatedPictures,
+    pictures: enrichedPictures,
     hasMore,
   });
 });
@@ -91,6 +278,91 @@ app.get('/api/server-pictures', (req, res) => {
 // Health endpoint for container orchestration and healthchecks
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
+});
+
+// Thumbnail generation endpoint: /api/server-images-thumb/<sourceName>/<imagePath>?width=200
+// 使用 middleware 而不是直接的 app.get 来避免 Express 5 的通配符解析问题
+app.use('/api/server-images-thumb/', async (req, res, next) => {
+  if (req.method !== 'GET') return next();
+  
+  try {
+    const width = Math.min(parseInt(req.query.width || 200), 400); // Cap width at 400px
+    if (isNaN(width) || width < 50) {
+      return res.status(400).json({ error: 'Invalid width parameter' });
+    }
+
+    // 获取去掉 /api/server-images-thumb/ 前缀后的路径
+    const pathParts = req.path.split('/').filter(p => p);
+    if (pathParts.length < 2) {
+      return res.status(400).json({ error: 'Invalid request: source name and image path required' });
+    }
+
+    const sourceName = pathParts[0];
+    const imageSubPath = pathParts.slice(1).join('/');
+    const sourcePath = serverSourceConfig.get(decodeURIComponent(sourceName));
+    
+    if (!sourcePath) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+
+    const imagePath = path.join(sourcePath, decodeURIComponent(imageSubPath));
+    
+    // Security check
+    if (!path.resolve(imagePath).startsWith(path.resolve(sourcePath))) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Check if file exists
+    try {
+      await fs.promises.access(imagePath);
+    } catch {
+      return res.status(404).json({ error: 'Image not found' });
+    }
+
+    const cacheKey = await getThumbCacheKey(sourceName, imageSubPath, width);
+    const cachePath = path.join(THUMB_CACHE_DIR, cacheKey);
+
+    // Serve from cache if exists
+    try {
+      await fs.promises.access(cachePath);
+      updateCacheEntryAccess(cacheKey);
+      res.set('Cache-Control', 'public, max-age=86400');
+      return res.sendFile(cachePath);
+    } catch {
+      // Cache miss, generate thumbnail
+    }
+
+    // Generate thumbnail using sharp
+    const metadata = await sharp(imagePath).metadata();
+    if (!metadata.width || !metadata.height) {
+      return res.status(400).json({ error: 'Cannot read image metadata' });
+    }
+
+    const aspectRatio = metadata.width / metadata.height;
+    const thumbHeight = Math.round(width / aspectRatio);
+
+    // Resize and convert to WebP for efficient storage/delivery
+    const thumbBuffer = await sharp(imagePath)
+      .resize(width, thumbHeight, { fit: 'cover', position: 'center' })
+      .webp({ quality: 75 })
+      .toBuffer();
+
+    // Save to cache
+    await fs.promises.writeFile(cachePath, thumbBuffer);
+    recordCacheEntry(cacheKey, thumbBuffer.length);
+    await saveCacheMetadata();
+    
+    // Cleanup if cache is getting too large
+    await cleanupCacheIfNeeded();
+
+    // Serve to client with long cache header
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Content-Type', 'image/webp');
+    res.send(thumbBuffer);
+  } catch (e) {
+    console.error('Thumbnail generation error:', e);
+    res.status(500).json({ error: 'Failed to generate thumbnail' });
+  }
 });
 
 // A robust way to handle image serving that avoids path-to-regexp parsing issues.
@@ -133,10 +405,15 @@ app.use('/api/server-images', (req, res) => {
   }
 });
 
-
-// 只处理非 /api/ 路径的前端路由
-app.get(/^\/(?!api\/).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+// 前端路由处理（必须放在所有 API 路由之后）
+// 使用 middleware 而不是 app.get('*') 来避免 path-to-regexp 问题
+app.use((req, res) => {
+  // 排除 API 路由（由前面的处理程序已处理）
+  if (!req.path.startsWith('/api/')) {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  } else {
+    res.status(404).json({ error: 'API endpoint not found' });
+  }
 });
 
 // --- Server-Side Data Source Logic ---
@@ -147,14 +424,14 @@ const serverDataCache = {
 };
 const serverSourceConfig = new Map(); // Maps source name to its real path
 
-const CACHE_VERSION = 1;
+const SERVER_CACHE_VERSION = 1;
 const CACHE_FILE_PATH = path.join(__dirname, 'server-cache.json');
 
 async function loadServerCache() {
   try {
     const raw = await fs.promises.readFile(CACHE_FILE_PATH, 'utf8');
     const payload = JSON.parse(raw);
-    if (payload.version !== CACHE_VERSION) {
+    if (payload.version !== SERVER_CACHE_VERSION) {
       console.log('Cache version mismatch. Ignoring stored cache.');
       return;
     }
@@ -178,7 +455,7 @@ async function loadServerCache() {
 
 async function persistServerCache() {
   const payload = {
-    version: CACHE_VERSION,
+    version: SERVER_CACHE_VERSION,
     sources: serverDataCache.sources,
     pictures: serverDataCache.pictures,
     sourceConfig: Array.from(serverSourceConfig.entries()),
@@ -222,13 +499,18 @@ function setupWatchersFromEnv(sourcesEnv) {
           const entries = await fs.promises.readdir(mountRoot, { withFileTypes: true });
           sources = entries.filter(en => en.isDirectory()).map(en => ({ name: en.name, path: path.join(mountRoot, en.name) }));
         } catch (err) {
-          console.warn('No mounted server image folders found under', mountRoot);
+          if (err.code === 'ENOENT') {
+            console.log('No mounted server image folders found under /server_images. Skipping watchers.');
+          } else {
+            console.warn('No mounted server image folders found under', mountRoot);
+          }
           sources = [];
         }
       }
 
       const pathsToWatch = sources.map(s => s.path).filter(Boolean);
       if (pathsToWatch.length === 0) {
+        console.log('No server sources to watch.');
         return;
       }
       console.log('Watching paths for changes:', pathsToWatch);
@@ -290,14 +572,23 @@ async function scanServerFolders() {
       const entries = await fs.promises.readdir(mountRoot, { withFileTypes: true });
       const discovered = entries.filter(en => en.isDirectory()).map(en => ({ name: en.name, path: path.join(mountRoot, en.name) }));
       if (discovered.length === 0) {
-        console.log(`No subfolders found under ${mountRoot}. If you intended to provide SERVER_SOURCES via environment, set it in docker-compose.`);
-        return;
+        console.log(`No subfolders found under ${mountRoot}. Server sources disabled. If you intended to provide SERVER_SOURCES via environment, set it in docker-compose.`);
+        // Gracefully skip server sources - do not fail
+        sources = [];
+      } else {
+        sources = discovered;
+        console.log('Auto-discovered server sources from container mount:', sources.map(s => s.name));
       }
-      sources = discovered;
-      console.log('Auto-discovered server sources from container mount:', sources.map(s => s.name));
     } catch (err) {
-      console.error('Failed to auto-discover server sources under /server_images:', err);
-      return;
+      if (err.code === 'ENOENT') {
+        console.log(`No mounted /server_images directory found. Server sources disabled. This is normal for development without server sources.`);
+        // Gracefully skip - directory doesn't exist
+        sources = [];
+      } else {
+        console.error('Failed to access server sources under /server_images:', err);
+        // Gracefully skip on other errors too
+        sources = [];
+      }
     }
   }
 
@@ -383,14 +674,24 @@ async function getFilesRecursively(dir) {
 // --- Server Startup ---
 
 async function startServer() {
+  // Initialize cache system
+  await ensureCacheDir();
+  await loadCacheMetadata();
+  startCacheMaintenanceTimer();
+  
   await loadServerCache();
   const sourcesEnv = process.env.SERVER_SOURCES;
   setupWatchersFromEnv(sourcesEnv);
 
-  if (serverDataCache.sources.length === 0 || serverDataCache.pictures.length === 0) {
+  // Scan if cache is empty, or trigger background refresh if cache exists
+  if (serverDataCache.sources.length === 0) {
+    console.log('No cached server sources found. Attempting to scan...');
     await scanServerFolders();
+    if (serverDataCache.sources.length === 0) {
+      console.log('No server sources available. Application running without server data sources (this is normal for development).');
+    }
   } else {
-    console.log('Usingpersisted  server cache. Triggering background validation scan.');
+    console.log('Using persisted server cache. Triggering background validation scan.');
     triggerRescan();
   }
 

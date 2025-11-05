@@ -22,16 +22,42 @@ function useResizeObserver(ref: any, callback: (entry: ResizeObserverEntry) => v
 
 
 const PictureCard = ({ data, width, height }: { data: Picture, width: number, height: number }) => {
-  const [imageUrl, setImageUrl] = useState<string | undefined>(() => {
-    // For remote images, the path is the URL. For local, we prefer thumbnail cache or undefined.
-    return typeof data.path === 'string' ? data.path : imageUrlCache.getThumb(data.id!, Math.round(width));
-  });
+  // Determine initial image source based on picture type
+  // For server source pictures with thumbUrl, use thumbnail first; for local, use cache or undefined
+  const getInitialImageUrl = () => {
+    if (typeof data.path === 'string') {
+      // Server source: prioritize thumbUrl if available, fallback to original path
+      const anyData = data as any;
+      return anyData.thumbUrl ? anyData.thumbUrl : data.path;
+    }
+    // Local file: use cached thumbnail if available
+    return imageUrlCache.getThumb(data.id!, Math.round(width));
+  };
+
+  const [imageUrl, setImageUrl] = useState<string | undefined>(getInitialImageUrl());
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  // Handle image load failure: fallback to original image for server sources
+  const handleImageError = () => {
+    if (typeof data.path === 'string') {
+      const anyData = data as any;
+      const currentUrl = imageUrl;
+      const thumbUrl = anyData.thumbUrl;
+      const originalPath = data.path;
+
+      // If we loaded a thumbnail and it failed, fallback to original
+      if (currentUrl === thumbUrl && thumbUrl !== originalPath) {
+        console.warn(`Thumbnail load failed for ${data.name}, falling back to original image`);
+        setImageUrl(originalPath);
+      }
+    }
+  };
 
   // Create a small thumbnail for local files only when the card becomes visible.
   useEffect(() => {
     if (typeof data.path === 'string') {
-      // remote URL — we already returned it above
+      // Server URL — thumbnail loading handled via img onerror
       return;
     }
 
@@ -113,7 +139,15 @@ const PictureCard = ({ data, width, height }: { data: Picture, width: number, he
   return (
     <div ref={containerRef}>
       <Box sx={{ position: 'relative', cursor: 'pointer', borderRadius: 1, overflow: 'hidden', width, height, '&:hover .overlay': { opacity: 1 } }}>
-        <img src={imageUrl} alt={data.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
+        <img 
+          ref={imgRef}
+          src={imageUrl} 
+          alt={data.name} 
+          loading="lazy" 
+          decoding="async" 
+          onError={handleImageError}
+          style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} 
+        />
         <Box className="overlay" sx={{ position: 'absolute', left: 0, right: 0, bottom: 0, p: 1, opacity: 0, transition: 'opacity 200ms ease-in-out', background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 70%, rgba(0,0,0,0) 100%)' }}>
           <Typography variant="body2" color="white" noWrap>{data.name}</Typography>
           <Typography variant="caption" color="white">{new Date(data.modified).toLocaleDateString()}</Typography>

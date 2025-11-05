@@ -12,7 +12,9 @@ services:
       # 使用自定义的 nginx 配置和前端构建输出，可以不管理这两行
       - nginx_conf:/etc/nginx:ro
       - frontend_dist:/usr/share/nginx/html:ro
-      
+      # 缓存的服务器端缩略图目录，和 server 容器保持一致
+      - ./thumb:/app/thumb_cache:ro
+
       # 和下面 app server 保持一致
       # 将宿主机上希望展示的图片目录分别挂载到容器的 /server_images/<name> 目录下。
       # 例如：
@@ -32,6 +34,9 @@ services:
       # 自定义的 nginx 配置文件和前端构建好的静态文件，可以不管理这两行
       - nginx_conf:/app/nginx:rw
       - frontend_dist:/app/dist:rw
+      - ./thumb:/app/thumb_cache:ro
+      # 缓存的服务器端缩略图目录，和 nginx 容器保持一致
+      - ./thumb:/app/thumb_cache:ro
 
       # 和上面 nginx 保持一致
       # 将宿主机上希望展示的图片目录分别挂载到容器的 /server_images/<name> 目录下。
