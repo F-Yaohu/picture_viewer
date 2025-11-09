@@ -5,6 +5,7 @@ import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
 import { db, type Picture, type DataSource } from '../db/db';
 import { imageUrlCache } from '../utils/imageUrlCache';
+import { groupAndLayoutPictures } from '../utils/layoutUtils';
 
 // Thumbnail size presets (must match server.cjs THUMBNAIL_SIZES)
 const THUMBNAIL_SIZES = { SMALL: 400, MEDIUM: 800, LARGE: 1600 } as const;
@@ -38,6 +39,23 @@ function useResizeObserver(ref: any, callback: (entry: ResizeObserverEntry) => v
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref, callback]);
+}
+
+// Debounce hook for performance optimization
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
 }
 
 
@@ -197,11 +215,13 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
   const [isLoading, setIsLoading] = useState(true);
   const hasMoreRef = useRef(true);
   const clientOffsetRef = useRef(0);
-  const serverOffsetsRef = useRef<Record<number, number>>({});
+  const serverOffsetRef = useRef(0); // Changed: single offset for unified server query
   const filterVersionRef = useRef(0);
   const isBatchLoadingRef = useRef(false);
   const pendingAnimationRef = useRef<number | null>(null);
-  const BATCH_SIZE = 50;
+  const BATCH_SIZE = 50; // Base batch size per request
+  const INITIAL_LOAD_MULTIPLIER = 3; // Load 3x on initial load for better distribution
+  const MIN_ROWS_THRESHOLD = 3; // Minimum rows before triggering auto-refill
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number>(800);
   const ROW_HEIGHT = rowHeight;
@@ -291,151 +311,169 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
     }
   }, []);
 
+  // Helper: Generate unique key for picture deduplication
+  const getKey = useCallback((p: Picture) => {
+    if (p.relativePath) return `${p.sourceId}|${p.relativePath}`;
+    if (typeof p.path === 'string') return `${p.sourceId}|${p.path}`;
+    return `${p.sourceId}|${p.name}`;
+  }, []);
+
+  // Load pictures from local/remote sources (IndexedDB)
+  const loadClientPictures = useCallback(async (
+    limit: number,
+    offset: number,
+    searchTermLower: string
+  ): Promise<{ pictures: Picture[]; hasMore: boolean; newOffset: number }> => {
+    if (selectedClientIds.length === 0) {
+      return { pictures: [], hasMore: false, newOffset: offset };
+    }
+
+    let collection = db.pictures.where('sourceId').anyOf(selectedClientIds);
+    if (searchTermLower) {
+      collection = collection.filter(p => p.name.toLowerCase().includes(searchTermLower));
+    }
+    const sorted = await collection.sortBy('modified');
+    sorted.reverse();
+    
+    const slice = sorted.slice(offset, offset + limit);
+    const hasMore = sorted.length > offset + slice.length;
+    const newOffset = offset + slice.length;
+    
+    return { pictures: slice, hasMore, newOffset };
+  }, [selectedClientIds]);
+
+  // Load pictures from server sources (API) - unified query for all selected servers
+  const loadServerPictures = useCallback(async (
+    limit: number,
+    offset: number,
+    trimmedSearch: string
+  ): Promise<{ pictures: Picture[]; hasMore: boolean; newOffset: number }> => {
+    if (selectedServerIds.length === 0) {
+      return { pictures: [], hasMore: false, newOffset: offset };
+    }
+
+    try {
+      // Unified query: all server sources in one request
+      const sourceIdsParam = selectedServerIds.join(',');
+      const params = new URLSearchParams({
+        sourceIds: sourceIdsParam,
+        offset: String(offset),
+        limit: String(limit),
+      });
+      if (trimmedSearch) params.set('searchTerm', trimmedSearch);
+      
+      const response = await fetch(`/api/server-pictures?${params.toString()}`);
+      if (!response.ok) throw new Error(`Server responded ${response.status}`);
+      
+      const data = await response.json();
+      const pictures = (data.pictures || []).map((pic: any) => {
+        // Construct thumbnail URL on frontend based on size needs
+        const source = serverSources.find(s => s.id === pic.sourceId);
+        const srcName = source?.name || '';
+        const thumbSize = selectThumbnailSize(containerWidth, window.devicePixelRatio);
+        const thumbUrl = pic.thumbPath 
+          ? `/api/server-images-thumb/${encodeURIComponent(srcName)}/${pic.thumbPath}?width=${thumbSize}`
+          : null;
+        
+        return { 
+          ...pic, 
+          thumbUrl,
+          sourceId: pic.sourceId 
+        };
+      });
+      
+      const newOffset = offset + pictures.length;
+      return { pictures, hasMore: data.hasMore || false, newOffset };
+    } catch (error) {
+      console.error('Failed to load server pictures', error);
+      return { pictures: [], hasMore: false, newOffset: offset };
+    }
+  }, [selectedServerIds, serverSources, containerWidth]);
+
+  // Main pagination logic
   const loadMoreItems = useCallback(async () => {
-    if (isBatchLoadingRef.current) return;
-    if (!hasMoreRef.current) return;
+    if (isBatchLoadingRef.current || !hasMoreRef.current) return;
+    
     isBatchLoadingRef.current = true;
     const version = filterVersionRef.current;
-    const limit = BATCH_SIZE;
-    const incoming: Picture[] = [];
-    let clientHasMore = false;
-    let serverHasMore = false;
-    let nextClientOffset = clientOffsetRef.current;
-    const nextServerOffsets: Record<number, number> = { ...serverOffsetsRef.current };
+    
+    // Use larger batch size for initial load to ensure good distribution across sources
+    const isInitialLoad = clientOffsetRef.current === 0 && serverOffsetRef.current === 0;
+    const limit = isInitialLoad ? BATCH_SIZE * INITIAL_LOAD_MULTIPLIER : BATCH_SIZE;
+    
     const trimmedSearch = searchTerm.trim();
     const searchTermLower = trimmedSearch.toLowerCase();
 
     try {
-      if (selectedClientIds.length > 0) {
-        let collection = db.pictures.where('sourceId').anyOf(selectedClientIds);
-        if (searchTermLower) {
-          collection = collection.filter(p => p.name.toLowerCase().includes(searchTermLower));
-        }
-        const sorted = await collection.sortBy('modified');
-        sorted.reverse();
-        const slice = sorted.slice(nextClientOffset, nextClientOffset + limit);
-        clientHasMore = sorted.length > nextClientOffset + slice.length;
-        nextClientOffset += slice.length;
-        incoming.push(...slice);
+      // Load from both client and server sources in parallel
+      const [clientResult, serverResult] = await Promise.all([
+        loadClientPictures(limit, clientOffsetRef.current, searchTermLower),
+        loadServerPictures(limit, serverOffsetRef.current, trimmedSearch)
+      ]);
+
+      // Check if filter changed during loading
+      if (filterVersionRef.current !== version) {
+        isBatchLoadingRef.current = false;
+        return;
       }
 
-      if (selectedServerIds.length > 0) {
-        const perServerLimit = Math.max(10, Math.ceil(limit / Math.max(1, selectedServerIds.length)));
-        for (const serverId of selectedServerIds) {
-          const source = serverSources.find(s => s.id === serverId);
-          if (!source) continue;
-          const offset = nextServerOffsets[serverId] || 0;
-          // Select quantized thumbnail size (400, 800, or 1600) based on layout
-          const thumbWidth = selectThumbnailSize(containerWidth, window.devicePixelRatio);
-          const params = new URLSearchParams({
-            offset: String(offset),
-            limit: String(perServerLimit),
-            sourceName: source.name,
-            thumbWidth: String(thumbWidth),
-          });
-          if (trimmedSearch) params.set('searchTerm', trimmedSearch);
-          try {
-            const response = await fetch(`/api/server-pictures?${params.toString()}`);
-            if (!response.ok) throw new Error(`Server responded ${response.status}`);
-            const data = await response.json();
-            const pictures = (data.pictures || []).map((pic: Picture) => ({ ...pic, sourceId: pic.sourceId ?? serverId }));
-            if (pictures.length > 0) {
-              incoming.push(...pictures);
-              nextServerOffsets[serverId] = offset + pictures.length;
-            }
-            if (data.hasMore) serverHasMore = true;
-          } catch (error) {
-            console.error(`Failed to load server pictures for ${source.name}`, error);
-          }
+      // Update offsets
+      clientOffsetRef.current = clientResult.newOffset;
+      serverOffsetRef.current = serverResult.newOffset;
+
+      // Merge and sort by timestamp (newest first)
+      const incoming = [...clientResult.pictures, ...serverResult.pictures];
+      incoming.sort((a, b) => b.modified - a.modified);
+
+      // Deduplicate and filter
+      const seen = new Set<string>();
+      const allowedBatch: Picture[] = [];
+      for (const p of incoming) {
+        if (!shouldDisplayPicture(p)) continue;
+        const k = getKey(p);
+        if (!seen.has(k)) {
+          seen.add(k);
+          allowedBatch.push(p);
         }
       }
+
+      const clientHasMore = clientResult.hasMore;
+      const serverHasMore = serverResult.hasMore;
+      hasMoreRef.current = clientHasMore || serverHasMore;
+
+      // If no new items but more data available, retry
+      if (allowedBatch.length === 0) {
+        isBatchLoadingRef.current = false;
+        if (hasMoreRef.current && pendingAnimationRef.current === null) {
+          pendingAnimationRef.current = window.requestAnimationFrame(() => {
+            pendingAnimationRef.current = null;
+            void loadMoreItems();
+          });
+        }
+        return;
+      }
+
+      // Add to items list
+      setItems(currentItems => {
+        if (filterVersionRef.current !== version) return currentItems;
+        if (currentItems.length === 0) return allowedBatch;
+        
+        const existing = new Set<string>(currentItems.map(it => getKey(it)));
+        const toAdd = allowedBatch.filter(p => !existing.has(getKey(p)));
+        return toAdd.length > 0 ? [...currentItems, ...toAdd] : currentItems;
+      });
+
     } catch (error) {
       console.error('Failed to load pictures batch', error);
-    }
-
-    if (filterVersionRef.current !== version) {
+      hasMoreRef.current = false;
+    } finally {
       isBatchLoadingRef.current = false;
-      return;
     }
-
-    clientOffsetRef.current = nextClientOffset;
-    serverOffsetsRef.current = nextServerOffsets;
-
-    if (incoming.length === 0) {
-      hasMoreRef.current = clientHasMore || serverHasMore;
-      isBatchLoadingRef.current = false;
-      if (hasMoreRef.current && pendingAnimationRef.current === null) {
-        pendingAnimationRef.current = window.requestAnimationFrame(() => {
-          pendingAnimationRef.current = null;
-          void loadMoreItems();
-        });
-      }
-      return;
-    }
-
-    incoming.sort((a, b) => b.modified - a.modified);
-
-    const getKey = (p: Picture) => {
-      if (p.relativePath) return `${p.sourceId}|${p.relativePath}`;
-      if (typeof p.path === 'string') return `${p.sourceId}|${p.path}`;
-      return `${p.sourceId}|${p.name}`;
-    };
-    const seen = new Set<string>();
-    const allowedBatch: Picture[] = [];
-    for (const p of incoming) {
-      if (!shouldDisplayPicture(p)) {
-        continue;
-      }
-      const k = getKey(p);
-      if (!seen.has(k)) {
-        seen.add(k);
-        allowedBatch.push(p);
-      }
-    }
-
-    if (filterVersionRef.current !== version) {
-      isBatchLoadingRef.current = false;
-      return;
-    }
-
-    if (allowedBatch.length === 0) {
-      hasMoreRef.current = clientHasMore || serverHasMore;
-      isBatchLoadingRef.current = false;
-      if (hasMoreRef.current && pendingAnimationRef.current === null) {
-        pendingAnimationRef.current = window.requestAnimationFrame(() => {
-          pendingAnimationRef.current = null;
-          void loadMoreItems();
-        });
-      }
-      return;
-    }
-
-    setItems(currentItems => {
-      if (filterVersionRef.current !== version) {
-        return currentItems;
-      }
-      if (currentItems.length === 0) {
-        return allowedBatch;
-      }
-      const existing = new Set<string>(currentItems.map(it => getKey(it)));
-      const toAdd: Picture[] = [];
-      for (const p of allowedBatch) {
-        const k = getKey(p);
-        if (!existing.has(k)) {
-          existing.add(k);
-          toAdd.push(p);
-        }
-      }
-      return toAdd.length > 0 ? [...currentItems, ...toAdd] : currentItems;
-    });
-
-    hasMoreRef.current = clientHasMore || serverHasMore;
-    isBatchLoadingRef.current = false;
-  }, [BATCH_SIZE, searchTerm, selectedClientIds, selectedServerIds, serverSources, shouldDisplayPicture]);
+  }, [BATCH_SIZE, searchTerm, loadClientPictures, loadServerPictures, shouldDisplayPicture, getKey]);
   
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  // Resize observer for container width
+  // Resize observer for container width with debouncing for performance
   useLayoutEffect(() => {
     if (containerRef.current) setContainerWidth(containerRef.current.clientWidth);
   }, []);
@@ -443,90 +481,26 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
     setContainerWidth(entry.contentRect.width);
   });
 
-  // Helper: group key based on date (yyyy-mm-dd)
-  function formatGroupKey(ms: number) {
-    const d = new Date(ms);
-    if (groupBy === 'month') {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      return `${y}-${m}`;
-    }
-    if (groupBy === 'week') {
-      // ISO week number: simple approximate using UTC
-      const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-      const dayNum = tmp.getUTCDay() || 7;
-      tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
-      const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
-      const weekNo = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-      return `${tmp.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
-    }
-    // default day
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
+  // Debounce container width to avoid excessive layout recalculations during resize
+  const debouncedContainerWidth = useDebounce(containerWidth, 150);
 
-  // Build justified rows grouped by date whenever items or container width change
+  // Build justified rows grouped by date whenever items or debounced container width change
   useEffect(() => {
-    if (!items || items.length === 0 || !containerWidth) {
-      setRows([]);
-      return;
+    const layouts = groupAndLayoutPictures(items, debouncedContainerWidth, ROW_HEIGHT, GAP, groupBy);
+    setRows(layouts);
+  }, [items, debouncedContainerWidth, ROW_HEIGHT, GAP, groupBy]);
+
+  // Auto-refill: if rendered rows are too few and more data available, load more
+  useEffect(() => {
+    // Count total rows across all groups
+    const totalRows = rows.reduce((sum, group) => sum + group.rows.length, 0);
+    
+    // If we have very few rows but more data available, trigger loading
+    if (totalRows > 0 && totalRows < MIN_ROWS_THRESHOLD && hasMoreRef.current && !isBatchLoadingRef.current) {
+      console.log(`Auto-refill triggered: only ${totalRows} rows rendered, loading more...`);
+      loadMoreItems();
     }
-
-    const groupsMap = new Map<string, Picture[]>();
-    // Maintain insertion order by iterating items
-    for (const p of items) {
-      const key = formatGroupKey(p.modified);
-      const arr = groupsMap.get(key) || [];
-      arr.push(p);
-      groupsMap.set(key, arr);
-    }
-
-    const effectiveContainerWidth = Math.max(100, containerWidth) - 1; // avoid div by zero
-    const groupAcc: Array<{ label: string; rows: Array<Array<{ item: Picture; width: number; height: number }>> }> = [];
-
-  for (const pictures of groupsMap.values()) {
-      // build rows for this group's pictures only
-      const rowsForGroup: Array<Array<{ item: Picture; width: number; height: number }>> = [];
-      let currentRow: Array<{ item: Picture; width: number; height: number }> = [];
-      let currentRowWidth = 0;
-
-      for (let i = 0; i < pictures.length; i++) {
-        const p = pictures[i];
-        const ratio = (p.width && p.height) ? (p.width / p.height) : (1.6);
-        const w = ratio * ROW_HEIGHT;
-        currentRow.push({ item: p, width: w, height: ROW_HEIGHT });
-        currentRowWidth += w + GAP;
-
-        if (currentRowWidth - GAP >= effectiveContainerWidth) {
-          const totalWidth = currentRow.reduce((s, it) => s + it.width, 0);
-          const gapsTotal = (currentRow.length - 1) * GAP;
-          const scale = (effectiveContainerWidth - gapsTotal) / totalWidth;
-          const finalHeight = Math.max(40, Math.round(ROW_HEIGHT * scale));
-          const finalized = currentRow.map(it => ({ item: it.item, width: Math.round(it.width * scale), height: finalHeight }));
-          rowsForGroup.push(finalized);
-          currentRow = [];
-          currentRowWidth = 0;
-        }
-      }
-
-      if (currentRow.length > 0) {
-        const totalWidth = currentRow.reduce((s, it) => s + it.width, 0);
-        const gapsTotal = (currentRow.length - 1) * GAP;
-        const scale = Math.min(1, (effectiveContainerWidth - gapsTotal) / totalWidth);
-        const finalHeight = Math.max(40, Math.round(ROW_HEIGHT * scale));
-        const finalized = currentRow.map(it => ({ item: it.item, width: Math.round(it.width * scale), height: finalHeight }));
-        rowsForGroup.push(finalized);
-      }
-
-      // Create a human-friendly label for the group
-      const label = new Date(pictures[0].modified).toLocaleDateString();
-      groupAcc.push({ label, rows: rowsForGroup });
-    }
-
-    setRows(groupAcc);
-  }, [items, containerWidth]);
+  }, [rows, loadMoreItems]);
 
   useEffect(() => {
     filterVersionRef.current += 1;
@@ -536,7 +510,7 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
     }
     isBatchLoadingRef.current = false;
     clientOffsetRef.current = 0;
-    serverOffsetsRef.current = {};
+    serverOffsetRef.current = 0; // Reset unified server offset
     setItems([]);
 
     if (selectedClientIds.length === 0 && selectedServerIds.length === 0) {
@@ -550,7 +524,7 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
     loadMoreItems().finally(() => {
       setIsLoading(false);
     });
-  }, [selectedClientIds, selectedServerIds, searchTerm, loadMoreItems]);
+  }, [selectedClientIds, selectedServerIds, searchTerm]); // Remove loadMoreItems from deps
 
   // IntersectionObserver to trigger loading more when sentinel is visible
   useEffect(() => {
@@ -562,10 +536,13 @@ export default function ImageGrid({ dataSources, selectedSourceIds, searchTerm, 
           loadMoreItems();
         }
       });
-    }, { root: null, rootMargin: '400px' });
+    }, { 
+      root: null, 
+      rootMargin: '800px' // Increased from 400px for earlier preloading
+    });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [items.length, loadMoreItems]);
+  }, [items.length]); // Remove loadMoreItems from deps
 
   useEffect(() => {
     onPicturesLoaded(items);

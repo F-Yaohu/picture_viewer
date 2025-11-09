@@ -120,72 +120,48 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
   }, [open, imageContainerRef.current]); // Depend on 'open' and the ref's current value
   // --- End of Wheel Handler ---
 
-  // Manage body & html overflow to hide scrollbars when fullscreen viewer is open
-  // Also prevent arrow key navigation from scrolling the page
+  // Manage scroll position when fullscreen viewer opens/closes
+  // MUI Dialog handles overflow management, we only need to restore scroll position
   useEffect(() => {
-    if (open) {
-      const htmlElement = document.documentElement;
-      const bodyElement = document.body;
+    if (!open) return;
+
+    const originalScrollY = window.scrollY;
+    
+    console.log('[Fullscreen] Opening - saving scroll position:', originalScrollY);
+    
+    // Prevent arrow key scrolling
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        e.preventDefault();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Cleanup function - restore scroll position only
+    return () => {
+      console.log('[Fullscreen] Closing - restoring scroll position to:', originalScrollY);
+      window.removeEventListener('keydown', handleKeyDown);
       
-      // Save original values
-      const originalHtmlOverflow = htmlElement.style.overflow;
-      const originalBodyOverflow = bodyElement.style.overflow;
-      const originalHtmlOverflowY = htmlElement.style.overflowY;
-      const originalBodyOverflowY = bodyElement.style.overflowY;
-      
-      // Use overflow-y: scroll to keep scrollbar space but hide the scrollbar with CSS
-      // This prevents layout shift when toggling fullscreen
-      htmlElement.style.overflowY = 'scroll';
-      bodyElement.style.overflowY = 'scroll';
-      
-      // Add CSS to hide the scrollbar while keeping its space
-      const style = document.createElement('style');
-      style.id = 'fullscreen-viewer-scrollbar-hide';
-      style.textContent = `
-        html::-webkit-scrollbar,
-        body::-webkit-scrollbar {
-          width: 15px;
-          background: transparent;
-        }
-        html::-webkit-scrollbar-track,
-        body::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        html::-webkit-scrollbar-thumb,
-        body::-webkit-scrollbar-thumb {
-          background: transparent;
-        }
-        /* Firefox */
-        html {
-          scrollbar-color: transparent;
-          scrollbar-width: auto;
-        }
-      `;
-      document.head.appendChild(style);
-      
-      // Prevent arrow key scrolling
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
-          e.preventDefault();
-        }
-      };
-      
-      window.addEventListener('keydown', handleKeyDown);
-      
-      return () => {
-        window.removeEventListener('keydown', handleKeyDown);
-        // Remove the style
-        const styleElement = document.getElementById('fullscreen-viewer-scrollbar-hide');
-        if (styleElement) {
-          styleElement.remove();
-        }
-        // Restore original values
-        htmlElement.style.overflow = originalHtmlOverflow;
-        bodyElement.style.overflow = originalBodyOverflow;
-        htmlElement.style.overflowY = originalHtmlOverflowY;
-        bodyElement.style.overflowY = originalBodyOverflowY;
-      };
-    }
+      // Let MUI handle overflow restoration, we just restore scroll
+      // Use setTimeout to ensure MUI has finished its cleanup
+      setTimeout(() => {
+        window.scrollTo(0, originalScrollY);
+        console.log('[Fullscreen] Scroll restored');
+        
+        // Verify
+        requestAnimationFrame(() => {
+          const scrollbarVisible = window.innerWidth > document.documentElement.clientWidth;
+          console.log('[Fullscreen] Scrollbar visible:', scrollbarVisible);
+          console.log('[Fullscreen] Body inline overflow:', document.body.style.overflow);
+          
+          if (window.scrollY !== originalScrollY) {
+            console.log('[Fullscreen] Secondary scroll correction');
+            window.scrollTo(0, originalScrollY);
+          }
+        });
+      }, 50); // Increased delay to let MUI finish cleanup
+    };
   }, [open]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -323,26 +299,33 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
       setIsLoadingOriginal(true);
 
       if (typeof picture.path === 'string') {
-        // It's a remote URL - use it directly without creating Blob
+        // It's a server source image
         const anyPic = picture as any;
         
-        // Show thumbnail first if available
-        if (anyPic.thumbUrl) {
-          if (isMounted) {
-            setImageUrl(anyPic.thumbUrl);
+        // For server sources, prefer thumbPath for high-quality thumbnail (1600px)
+        // thumbPath is the encoded subpath provided by backend API
+        if (anyPic.thumbPath) {
+          try {
+            // Get source info to construct thumbnail URL
+            const source = await db.dataSources.get(picture.sourceId);
+            if (source && isMounted) {
+              // Construct large thumbnail URL (1600px for fullscreen viewing)
+              const largeThumbnailUrl = `/api/server-images-thumb/${encodeURIComponent(source.name)}/${anyPic.thumbPath}?width=1600`;
+              console.log('FullscreenViewer: Loading large thumbnail:', largeThumbnailUrl);
+              setImageUrl(largeThumbnailUrl);
+              setIsLoadingOriginal(false);
+              return; // Exit early if successful
+            }
+          } catch (error) {
+            console.warn('Failed to construct thumbnail URL, falling back to original path', error);
           }
         }
-
-        // For remote URLs, we can use the original path directly
-        // This avoids Blob URL creation and caching issues
+        
+        // Fallback to original path (for remote URLs or when thumbPath unavailable)
         if (isMounted) {
-          // Delay setting the original to simulate loading
-          setTimeout(() => {
-            if (isMounted) {
-              setImageUrl(anyPic.path);
-              setIsLoadingOriginal(false);
-            }
-          }, 50);
+          console.log('FullscreenViewer: Using original path:', picture.path);
+          setImageUrl(picture.path);
+          setIsLoadingOriginal(false);
         }
       } else {
         // It's a local FileSystemFileHandle
@@ -381,7 +364,19 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
   }, [imageUrl]);
 
   return (
-    <Dialog fullScreen open={open} onClose={onClose} PaperProps={{ sx: { bgcolor: 'transparent', borderRadius: 0 } }}>
+    <Dialog 
+      fullScreen 
+      open={open} 
+      onClose={onClose}
+      disableScrollLock={false} // Let MUI manage scroll lock
+      PaperProps={{ 
+        sx: { 
+          bgcolor: 'transparent', 
+          borderRadius: 0,
+          overflow: 'hidden' // Prevent horizontal scrollbar
+        } 
+      }}
+    >
   <AppBar sx={{
     position: 'absolute',
     top: 0,
@@ -395,9 +390,24 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
     // reduce blur to make the gradient crisper but still provide slight backdrop separation
     backdropFilter: 'blur(1px)'
   }}>
-        <Toolbar sx={{ position: 'relative', minHeight: 88, alignItems: 'center' }}>
+        <Toolbar sx={{ 
+          position: 'relative', 
+          minHeight: 88, 
+          alignItems: 'center',
+          px: 2, // Add horizontal padding
+          maxWidth: '100vw', // Prevent overflow
+          boxSizing: 'border-box'
+        }}>
           <Typography
-            sx={{ ml: 2, flex: 1, color: 'common.white', fontSize: '0.95rem', maxWidth: '40ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pr: '180px' }}
+            sx={{ 
+              flex: 1, 
+              color: 'common.white', 
+              fontSize: '0.95rem', 
+              maxWidth: 'calc(100% - 200px)', // Reserve space for buttons
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis', 
+              whiteSpace: 'nowrap'
+            }}
             variant="h6"
             component="div"
             title={picture?.name}
@@ -405,7 +415,15 @@ export default function FullscreenViewer({ open, onClose, picture, onNavigate }:
             {picture?.name || 'Image Viewer'}
           </Typography>
 
-          <Box sx={{ position: 'absolute', right: 8, top: 0, height: '100%', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ 
+            position: 'absolute', 
+            right: 8, 
+            top: 0, 
+            height: '100%', 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 1 
+          }}>
             <IconButton ref={(el: HTMLButtonElement | null) => { infoButtonRef.current = el }} sx={{ color: 'rgba(255,255,255,0.95)' }} onClick={() => setDetailsOpen(prev => !prev)} aria-label="toggle details">
               <InfoIcon />
             </IconButton>

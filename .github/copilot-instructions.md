@@ -1,54 +1,204 @@
-## 快速目标（给 AI 开发代理）
+# AI Agent Instructions for Picture Viewer App
 
-这是一个基于 React + TypeScript + Vite 的前端应用（包含一个小型 Node 静态/代理服务）。目标是让你迅速理解项目结构、常见改动点及工程命令，以便能安全、可预测地修改代码或实现新特性。
+## Architecture Overview
 
-### 核心概要
-- 前端：`src/`（入口 `src/main.tsx`, 主组件 `src/App.tsx`）。UI 基于 MUI（`@mui/material`）。
-- 状态：Redux Toolkit（`src/store/store.ts` 与 `src/store/slices/*.ts`，例如 `dataSourceSlice.ts`）。
-- 本地数据：Dexie（IndexedDB 封装），定义在 `src/db/db.ts`。
-- 后台/代理：简单 Node 服务在 `server.cjs`（用于静态与 `/api/proxy` 转发）。
-- Worker：长耗时扫描/索引任务放在 `src/workers/scan.worker.ts`。
+**Picture Viewer** is a React + TypeScript + Vite image management app with IndexedDB persistence, Web Workers for scanning, and a Node.js backend for serving/proxying images. Core design goal: **handle 10,000+ images smoothly via paginated, time-sorted loading**.
 
-### 重要文件（快速索引）
-- `package.json` — 启动/构建脚本（`dev`, `build`, `start`, `preview`, `lint`）。
-- `vite.config.ts` — Vite 配置（开发/构建时重要）。
-- `src/components/` — 关键 UI 组件（如 `ImageGrid.tsx`, `FullscreenViewer.tsx`, `DataSourceList.tsx`, `RemoteSourceDialog.tsx`）。
-- `src/utils/permissionUtils.ts` — 本地文件夹授权逻辑（File System Access API），常见错误/重新授权提示逻辑在此处。
-- `src/utils/imageUrlCache.ts` — 图片 URL 缓存/预处理工具。
-- `src/i18n.ts` 与 `src/locales/` — 国际化（中/英）。
+### Tech Stack
+- **Frontend**: React 19 + TypeScript, MUI, Redux Toolkit, Dexie (IndexedDB), i18next
+- **Backend**: Node.js/Express (`server.cjs`) with `sharp` for thumbnails, `chokidar` for file watching
+- **Build**: Vite 7 with Web Worker support, Docker deployment via nginx proxy
 
-### 常见工程命令（示例）
-- 本地开发（推荐两终端）：
-  1) 在一个终端启动后端/代理：`node server.cjs`
-  2) 在另一个终端启动前端开发：`npm run dev`
-- 构建与本地运行生产包：`npm run build` 然后 `npm start`（`build` 会先 `tsc -b` 然后 `vite build`）。
-- Lint：`npm run lint`。
-
-### 项目约定与模式（可直接遵循）
-- Redux：使用 Redux Toolkit 的 slice 模式。要新增状态或业务流，优先在 `src/store/slices/` 新建或修改 slice，并在 `src/store/store.ts` 注册。
-- 持久化：使用 Dexie（`src/db/db.ts`）管理 IndexedDB，数据模型变更需同步更新该文件并考虑迁移策略。
-- 长耗时任务：将扫描/索引等逻辑放入 `src/workers/scan.worker.ts`，主线程通过 postMessage 与 worker 交互。
-- 权限：对本地文件夹访问，优先复用 `permissionUtils.ts` 中的工具；UI 中 `PermissionManager.tsx` 负责提示与重试流程。
-- 远程数据源：`RemoteSourceDialog.tsx` 处理 API 配置和字段映射，注意请求/响应的分页与 CORS（也可走内置 `/api/proxy`）。
-
-### 部署与 Docker 相关要点
-- 镜像/容器：README 中给出 `docker-compose.yml` 示例。服务器容器会自动识别挂载到容器内 `/server_images/` 目录下的每个子文件夹并将其视为一个 server 数据源（源名使用子文件夹名），因此通常无需通过 `SERVER_SOURCES` 环境变量手动配置数据源映射。
-- 服务器端依赖 `sharp`（用于图像处理），任何对图像的后端处理改动通常需要在 `server.cjs` 或新增的后端模块中修改并重建镜像。
-
-### 修改/新增功能的小贴士（示例）
-- 新增数据源类型：
-  1) 在 `src/store/slices/dataSourceSlice.ts` 添加对应 action/reducer 设置默认状态。
-  2) 在 UI 添加表单（如 `RemoteSourceDialog.tsx`）并复用现有映射字段结构。
-  3) 若需存储到浏览器端，更新 `src/db/db.ts` 并处理 Dexie 模式。
-
-- 添加后端代理端点：修改 `server.cjs`，并在前端使用 `/api/proxy` 路由（如需跨域或转发头部）。
-
-### 不要做的事（安全边界）
-- 不要在前端直接硬编码敏感凭证或外部服务密钥。若必须，请通过 `server.cjs` 代理或环境变量注入到服务端。
-- 不要绕过 `permissionUtils.ts` 的授权流程：File System Access API 权限必须通过用户触发的 UI 流程获得。
-
-### 快速示例片段（修改 Redux slice 的路径）
-示例：若要更新数据源状态，编辑 `src/store/slices/dataSourceSlice.ts` 并在 `src/store/store.ts` 注册；UI 组件 `DataSourceList.tsx` 会自动读取该 slice。
+### Critical Files
+- `src/App.tsx` - Main app, scan worker orchestration, global state
+- `src/components/ImageGrid.tsx` - **Core pagination logic** (dual-mode: client offset for local/remote, server offset per source)
+- `src/workers/scan.worker.ts` - Scans local folders, parses EXIF via `exifr`, computes diffs (adds/updates/deletes)
+- `src/db/db.ts` - Dexie schema (12 versions), `DataSource` and `Picture` tables
+- `server.cjs` - REST API for server sources, 3-tier thumbnail cache (400/800/1600px WebP)
 
 ---
-如果你希望我合并进现有的 `.github/copilot-instructions.md`（若仓库后来添加了一个），或把内容扩展为更详细的开发者指南（包含示例 PR/issue 模板、代码风格规则、常见改动 checklist），请告诉我你想要的深度和重点区域。现在我会把这个文件添加到仓库并继续下一个验证步骤。
+
+## Core Design Patterns
+
+### 1. Multi-Source Pagination Strategy
+**Problem**: Different source types (local/remote/server) require different loading patterns.
+
+**Solution** (see `ImageGrid.tsx`):
+- **Local/Remote sources**: Per-source offset tracking via `clientOffsetRef`, loads from IndexedDB
+- **Server sources**: Unified global offset per server ID (`serverOffsetsRef`), single API call fetches mixed results
+- **Refill trigger**: When `timelineQueue.length < PRELOAD_THRESHOLD (100)`, automatically loads next batch
+
+```typescript
+// ImageGrid.tsx lines ~299-350
+const limit = BATCH_SIZE; // 50
+if (selectedClientSources.length > 0) {
+  const slice = sorted.slice(nextClientOffset, nextClientOffset + limit);
+  clientHasMore = sorted.length > nextClientOffset + slice.length;
+}
+if (selectedServerIds.length > 0) {
+  const perServerLimit = Math.ceil(limit / selectedServerIds.length);
+  // Fetch via /api/server-sources/${serverId}/pictures?offset=X&limit=Y
+}
+```
+
+**Why**: Server sources benefit from pre-sorted database queries (faster), while local/remote need per-source control.
+
+### 2. Strict Timestamp Descending Order
+**All images across sources** are merged into a single `timelineQueue` sorted by `modified` DESC (newest first). Users always see chronologically correct order, regardless of source load timing.
+
+**Implementation**: `ImageGrid.tsx` re-sorts entire queue after each batch load:
+```typescript
+const nextQueue = [...currentQueue, ...newPictures].sort((a, b) => b.modified - a.modified);
+```
+
+### 3. File System Access API Permission Flow
+**Critical**: Browser permissions are ephemeral. Always re-verify before accessing local files.
+
+**Pattern** (`permissionUtils.ts`):
+```typescript
+if ((await handle.queryPermission({ mode: 'read' })) !== 'granted') {
+  await handle.requestPermission({ mode: 'read' }); // Must be user-triggered
+}
+```
+
+**UI**: `PermissionManager.tsx` listens for permission errors and shows re-auth prompts. Never bypass this flow.
+
+### 4. Web Worker for Heavy Lifting
+**Scan operations block main thread** if run synchronously. Always use `scan.worker.ts`:
+
+```typescript
+// App.tsx lines ~100-150
+scanWorker.current.postMessage({ type: 'scan', sources, existingPictures });
+scanWorker.current.onmessage = (e) => {
+  if (e.data.type === 'progress') { /* update UI */ }
+  if (e.data.type === 'complete') { /* apply diffs to IndexedDB */ }
+};
+```
+
+**Worker responsibilities**: Recursively walk directories, parse EXIF (12 tags), compute diffs against existing DB state.
+
+### 5. 3-Tier Thumbnail Cache (Backend)
+**Problem**: Unlimited thumbnail sizes bloat cache; cache misses harm perf.
+
+**Solution** (`server.cjs` lines ~20-100):
+- Only generate 3 sizes: 400px (mobile), 800px (standard), 1600px (HiDPI)
+- Frontend selects optimal size via `selectThumbnailSize(containerWidth, dpr)`
+- Cache stored as WebP, LRU eviction when exceeding 500MB or 7-day TTL
+
+```javascript
+const THUMBNAIL_SIZES = { SMALL: 400, MEDIUM: 800, LARGE: 1600 };
+const cacheKey = `${md5(sourceName + imagePath + width)}.webp`;
+```
+
+**Why**: 95%+ cache hit rate vs 30% with dynamic sizing.
+
+---
+
+## Development Workflows
+
+### Local Development (Two-Terminal Setup)
+```bash
+# Terminal 1: Backend (serves images, proxies APIs)
+node server.cjs  # Listens on :3889
+
+# Terminal 2: Frontend dev server
+npm run dev      # Vite on :5173, proxies /api to :3889
+```
+
+**Debugging Tips**:
+- **Permission errors**: Check `PermissionManager.tsx` rendering, verify user gesture triggered request
+- **Pagination bugs**: Add console logs in `ImageGrid.tsx` around `clientOffsetRef`/`serverOffsetsRef` updates
+- **Worker crashes**: Check `scan.worker.ts` error handler, ensure EXIF parsing doesn't throw uncaught exceptions
+
+### Build & Deploy
+```bash
+npm run build   # tsc -b && vite build → dist/
+npm start       # Runs server.cjs, serves static from dist/ on :3889
+```
+
+**Docker**: `docker-compose.yml` mounts host dirs to `/server_images/<name>` - each subdir becomes a server source. No env vars needed.
+
+---
+
+## Data Model (Dexie)
+
+### DataSource Table
+```typescript
+interface DataSource {
+  id?: number;
+  type: 'local' | 'remote' | 'server';
+  name: string;
+  path: any; // FileSystemDirectoryHandle | string URL
+  enabled: number; // 1=active, 0=disabled
+  includeSubfolders?: boolean;
+  disabledFolders?: string[]; // Relative paths to skip
+  remoteConfig?: RemoteConfig; // API config for remote sources
+}
+```
+
+### Picture Table
+```typescript
+interface Picture {
+  id?: number;
+  sourceId: number; // FK to DataSource.id
+  name: string;
+  path: any; // FileSystemFileHandle | string URL
+  modified: number; // Timestamp for sorting
+  size?: number;
+  width?: number; height?: number;
+  exifMake?: string; exifModel?: string; exifCreateDate?: number;
+  // ... 7 more EXIF fields stored by worker
+}
+// Indexes: [sourceId+modified] for efficient pagination queries
+```
+
+**Version History**: 12 migrations. Always increment version when changing schema. Add `.upgrade()` callback if data transform needed.
+
+---
+
+## Common Modification Scenarios
+
+### Add New Data Source Type
+1. Extend `DataSource` interface in `db/db.ts` (bump version if schema changes)
+2. Add reducer in `store/slices/dataSourceSlice.ts` (e.g., `addSourceType`)
+3. Create UI form in `components/` (follow `RemoteSourceDialog.tsx` pattern)
+4. Update `scan.worker.ts` to handle new source logic
+
+### Modify Thumbnail Sizes
+1. Update `THUMBNAIL_SIZES` in `server.cjs`
+2. Update matching constants in `ImageGrid.tsx` (`selectThumbnailSize` function)
+3. Clear `thumb_cache/` dir to regenerate
+
+### Add EXIF Field
+1. Add field to `Picture` interface in `db/db.ts` (no index needed)
+2. Extract field in `scan.worker.ts` (add to `exifr.parse()` tag list)
+3. Display in `FullscreenViewer.tsx` metadata panel
+
+---
+
+## Safety Rules
+
+1. **Never** modify files directly via terminal commands - use File System Access API
+2. **Never** hardcode credentials - use `server.cjs` proxy with env vars
+3. **Never** query IndexedDB without proper indexes - check `db.ts` compound indexes
+4. **Never** skip Dexie version bumps when changing schema
+5. **Never** block main thread - offload to `scan.worker.ts` for operations >50ms
+
+---
+
+## Key Design Decisions (from DESIGN_GOALS.md)
+
+- **Pagination over full load**: Prevents UI freeze on 10k+ images
+- **Global timestamp sort**: User sees newest first, regardless of source
+- **Proactive refill at 100 items**: User never waits for loading
+- **3-tier cache**: Optimal balance between cache size and hit rate
+- **Worker-based scanning**: Keeps UI responsive during EXIF parsing
+
+---
+
+**Quick Reference**:
+- State management: `src/store/slices/dataSourceSlice.ts` + `store.ts`
+- Pagination logic: `src/components/ImageGrid.tsx` lines 195-400
+- Permission flow: `src/utils/permissionUtils.ts` + `PermissionManager.tsx`
+- Backend API: `server.cjs` lines 200-500 (server source endpoints)
+- I18n: `src/locales/en.json`, `zh.json` (use `useTranslation()` hook)

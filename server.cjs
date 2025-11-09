@@ -89,6 +89,29 @@ function updateCacheEntryAccess(filename) {
   }
 }
 
+/**
+ * Generate cache filename using predictable naming (Twitter-style)
+ * Format: <source>/<path>/<size>.webp
+ * This allows Nginx to directly serve cached files
+ */
+async function getThumbCacheKeyTwitterStyle(sourceName, imagePath, width) {
+  const crypto = require('crypto');
+  // Create a deterministic hash of source+path (for directory structure)
+  const pathHash = crypto.createHash('md5').update(`${sourceName}/${imagePath}`).digest('hex');
+  
+  // Use first 2 chars for subdirectory (reduces files per directory)
+  const subdir = pathHash.substring(0, 2);
+  
+  // Size name mapping (Twitter-style)
+  const sizeName = width <= 400 ? 'small' : width <= 800 ? 'medium' : 'large';
+  
+  // Return path-like structure: <subdir>/<hash>_<size>.webp
+  return `${subdir}/${pathHash}_${sizeName}.webp`;
+}
+
+/**
+ * Legacy hash-based cache key (for backward compatibility)
+ */
 async function getThumbCacheKey(sourceName, imagePath, width) {
   const crypto = require('crypto');
   const key = `${sourceName}/${imagePath}/${width}`;
@@ -187,6 +210,140 @@ function startCacheMaintenanceTimer() {
   }, CACHE_CLEANUP_INTERVAL_MS);
 }
 
+// --- Background Thumbnail Pre-generation ---
+
+let thumbnailPregenQueue = [];
+let isPregenRunning = false;
+const PREGEN_BATCH_SIZE = 5; // Process 5 images at a time
+const PREGEN_DELAY_MS = 2000; // 2 second delay between batches to avoid disk thrashing
+const PREGEN_IDLE_CHECK_MS = 30000; // Only run during idle times (check every 30s)
+
+/**
+ * Check if system is idle (low CPU/disk activity)
+ * Simple heuristic: check if there are recent cache access
+ */
+function isSystemIdle() {
+  const now = Date.now();
+  const recentAccessThreshold = 5000; // 5 seconds
+  
+  // Check if there were recent cache accesses
+  const recentAccesses = Object.values(cacheMetadata.entries).filter(entry => 
+    now - entry.modifiedAt < recentAccessThreshold
+  );
+  
+  // System is idle if no recent cache access (no active users)
+  return recentAccesses.length === 0;
+}
+
+/**
+ * Background thumbnail pre-generation worker
+ * Generates thumbnails in batches during idle time
+ */
+async function backgroundThumbnailPregen() {
+  if (isPregenRunning || thumbnailPregenQueue.length === 0) {
+    return;
+  }
+  
+  // Only run during idle periods
+  if (!isSystemIdle()) {
+    return;
+  }
+  
+  isPregenRunning = true;
+  
+  try {
+    // Take a batch from the queue
+    const batch = thumbnailPregenQueue.splice(0, PREGEN_BATCH_SIZE);
+    
+    for (const item of batch) {
+      const { sourceName, imageSubPath, imagePath } = item;
+      
+      try {
+        // Generate all three size tiers
+        for (const size of THUMBNAIL_SIZES_ARRAY) {
+          const cacheKey = await getThumbCacheKeyTwitterStyle(sourceName, imageSubPath, size);
+          const cachePath = path.join(THUMB_CACHE_DIR, cacheKey);
+          
+          // Skip if already exists
+          try {
+            await fs.promises.access(cachePath);
+            continue; // Already exists
+          } catch {
+            // Need to generate
+          }
+          
+          // Generate thumbnail
+          const metadata = await sharp(imagePath).metadata();
+          if (!metadata.width || !metadata.height) continue;
+          
+          const aspectRatio = metadata.width / metadata.height;
+          const thumbHeight = Math.round(size / aspectRatio);
+          
+          const thumbBuffer = await sharp(imagePath)
+            .resize(size, thumbHeight, { fit: 'cover', position: 'center' })
+            .webp({ quality: 75 })
+            .toBuffer();
+          
+          // Ensure subdirectory exists before writing
+          const cacheDir = path.dirname(cachePath);
+          await fs.promises.mkdir(cacheDir, { recursive: true });
+          
+          await fs.promises.writeFile(cachePath, thumbBuffer);
+          recordCacheEntry(cacheKey, thumbBuffer.length);
+        }
+      } catch (error) {
+        console.warn(`Background pregen failed for ${imageSubPath}:`, error.message);
+      }
+    }
+    
+    await saveCacheMetadata();
+    
+    if (thumbnailPregenQueue.length > 0) {
+      console.log(`Background thumbnail pregen: ${batch.length} processed, ${thumbnailPregenQueue.length} remaining`);
+    }
+  } catch (error) {
+    console.error('Background thumbnail pregen error:', error);
+  } finally {
+    isPregenRunning = false;
+  }
+}
+
+/**
+ * Initialize thumbnail pre-generation queue from server pictures
+ */
+function initThumbnailPregenQueue() {
+  thumbnailPregenQueue = [];
+  
+  for (const picture of serverDataCache.pictures) {
+    const pathMatch = picture.path.match(/^\/server-images\/([^/]+)\/(.+)$/);
+    if (!pathMatch) continue;
+    
+    const sourceName = decodeURIComponent(pathMatch[1]);
+    const imageSubPath = pathMatch[2];
+    const sourcePath = serverSourceConfig.get(sourceName);
+    if (!sourcePath) continue;
+    
+    const imagePath = path.join(sourcePath, decodeURIComponent(imageSubPath));
+    
+    thumbnailPregenQueue.push({
+      sourceName,
+      imageSubPath,
+      imagePath
+    });
+  }
+  
+  console.log(`Initialized thumbnail pre-generation queue with ${thumbnailPregenQueue.length} images`);
+}
+
+/**
+ * Start background thumbnail pre-generation timer
+ */
+function startThumbnailPregenTimer() {
+  setInterval(async () => {
+    await backgroundThumbnailPregen();
+  }, PREGEN_IDLE_CHECK_MS);
+}
+
 // 静态资源托管（dist为React打包目录）
 app.use(express.static(path.join(__dirname, 'dist')));
 
@@ -227,61 +384,60 @@ app.get('/api/server-data', (req, res) => {
 });
 
 app.get('/api/server-pictures', (req, res) => {
-  const { sourceName, offset = 0, limit = 50, searchTerm = '', thumbWidth = 200 } = req.query;
+  const { sourceIds, offset = 0, limit = 50, searchTerm = '' } = req.query;
 
   let picturesToFilter = [];
 
-  if (sourceName && sourceName !== 'all') {
-    // Filter by a specific server source
-    picturesToFilter = serverDataCache.pictures.filter(p => {
-      const source = serverDataCache.sources.find(s => s.id === p.sourceId);
-      return source && source.name === sourceName;
-    });
+  // Support both sourceIds (comma-separated) and legacy sourceName
+  if (sourceIds) {
+    // Parse comma-separated source IDs: "1001,1002,1003"
+    const idsArray = sourceIds.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
+    if (idsArray.length > 0) {
+      // Filter pictures by multiple source IDs (unified query)
+      picturesToFilter = serverDataCache.pictures.filter(p => idsArray.includes(p.sourceId));
+    } else {
+      picturesToFilter = [];
+    }
   } else {
-    // Use all server pictures
+    // Fallback: use all server pictures if no sourceIds specified
     picturesToFilter = serverDataCache.pictures;
   }
 
-  // Apply search term
+  // Apply search term (case-insensitive filename matching)
   if (searchTerm) {
     const lowercasedTerm = searchTerm.toLowerCase();
     picturesToFilter = picturesToFilter.filter(p => p.name.toLowerCase().includes(lowercasedTerm));
   }
 
-  // Sort by modification date (newest first)
-  picturesToFilter.sort((a, b) => b.modified - a.modified);
-
+  // Pictures are already sorted, just slice for pagination
   const numOffset = parseInt(offset, 10);
   const numLimit = parseInt(limit, 10);
 
   const paginatedPictures = picturesToFilter.slice(numOffset, numOffset + numLimit);
   const hasMore = (numOffset + paginatedPictures.length) < picturesToFilter.length;
 
-  // Enrich pictures with thumbnail URL
-  const thumbSize = parseInt(thumbWidth, 10) || 200;
+  // Return pictures without thumbUrl (frontend will construct it based on size needs)
   const enrichedPictures = paginatedPictures.map(pic => {
-    // Extract source name from the original path construction logic
     const source = serverDataCache.sources.find(s => s.id === pic.sourceId);
     const srcName = source ? source.name : '';
     
-    // Build thumbnail URL: /api/server-images-thumb/<sourceName>/<imagePath>?width=<size>
-    // The imagePath part of pic.path is the encoded subpath after the source name
+    // Extract encoded subpath for frontend thumbnail construction
     const pathMatch = pic.path.match(/^\/server-images\/([^/]+)\/(.+)$/);
-    let thumbUrl = null;
+    let thumbPath = null;
     if (pathMatch && srcName) {
-      const encodedSubPath = pathMatch[2];
-      thumbUrl = `/api/server-images-thumb/${encodeURIComponent(srcName)}/${encodedSubPath}?width=${thumbSize}`;
+      thumbPath = pathMatch[2]; // encoded subpath
     }
 
     return {
       ...pic,
-      thumbUrl,
+      thumbPath, // Frontend will use this to construct thumbnail URL with desired size
     };
   });
 
   res.json({
     pictures: enrichedPictures,
     hasMore,
+    total: picturesToFilter.length, // Total count for debugging
   });
 });
 
@@ -333,7 +489,8 @@ app.use('/api/server-images-thumb/', async (req, res, next) => {
       return res.status(404).json({ error: 'Image not found' });
     }
 
-    const cacheKey = await getThumbCacheKey(sourceName, imageSubPath, width);
+    // Use Twitter-style predictable cache naming for Nginx direct serving
+    const cacheKey = await getThumbCacheKeyTwitterStyle(sourceName, imageSubPath, width);
     const cachePath = path.join(THUMB_CACHE_DIR, cacheKey);
 
     // Serve from cache if exists
@@ -360,6 +517,10 @@ app.use('/api/server-images-thumb/', async (req, res, next) => {
       .resize(width, thumbHeight, { fit: 'cover', position: 'center' })
       .webp({ quality: 75 })
       .toBuffer();
+
+    // Ensure subdirectory exists (Twitter-style naming uses 2-char subdirs)
+    const cacheDir = path.dirname(cachePath);
+    await fs.promises.mkdir(cacheDir, { recursive: true });
 
     // Save to cache
     await fs.promises.writeFile(cachePath, thumbBuffer);
@@ -667,8 +828,13 @@ async function scanServerFolders() {
     for (const [name, sourcePath] of nextSourceConfig.entries()) {
       serverSourceConfig.set(name, sourcePath);
     }
+    
+    // Pre-sort pictures by modification date (newest first) for efficient pagination
+    // This avoids sorting on every request
+    serverDataCache.pictures.sort((a, b) => b.modified - a.modified);
+    
     await persistServerCache();
-    console.log(`Scan complete. Found ${serverDataCache.sources.length} sources and ${serverDataCache.pictures.length} pictures.`);
+    console.log(`Scan complete. Found ${serverDataCache.sources.length} sources and ${serverDataCache.pictures.length} pictures (pre-sorted by date).`);
   } catch (e) {
     console.error('Failed to parse SERVER_SOURCES or scan folders:', e);
   }
@@ -696,6 +862,12 @@ async function startServer() {
   // Initialize cache system
   await ensureCacheDir();
   await loadCacheMetadata();
+  
+  // Run initial cache cleanup on startup
+  console.log('Running initial cache cleanup...');
+  await cleanupCacheIfNeeded();
+  
+  // Start periodic maintenance timer
   startCacheMaintenanceTimer();
   
   await loadServerCache();
@@ -712,6 +884,13 @@ async function startServer() {
   } else {
     console.log('Using persisted server cache. Triggering background validation scan.');
     triggerRescan();
+  }
+  
+  // Initialize and start background thumbnail pre-generation
+  if (serverDataCache.pictures.length > 0) {
+    initThumbnailPregenQueue();
+    startThumbnailPregenTimer();
+    console.log('Background thumbnail pre-generation enabled (will run during idle periods)');
   }
 
   app.listen(3889, () => console.log('Server running on http://localhost:3889'));
